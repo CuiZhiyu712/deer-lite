@@ -10,7 +10,7 @@ public class ChatSession {
     private String id;
     private String title;
     private String model;
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String todosJson;
     private Instant createdAt;
     private Instant updatedAt;

@@ -12,9 +12,9 @@ public class Run {
     private String sessionId;
     @Column(nullable = false, length = 32)
     private String status;   // RUNNING / DONE / FAILED / CANCELLED
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String input;
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String error;
     private Long inputTokens;
     private Long outputTokens;
@@ -44,4 +44,5 @@ public class Run {
     public Instant getStartedAt() { return startedAt; }
     public Instant getEndedAt() { return endedAt; }
     public void setEndedAt(Instant endedAt) { this.endedAt = endedAt; }
+    public void setStartedAt(Instant startedAt) { this.startedAt = startedAt; }
 }

@@ -14,9 +14,9 @@ public class MessageEntity {
     private int seq;
     @Column(nullable = false, length = 32)
     private String role;
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String content;
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String toolCallsJson;
     private String toolCallId;
     private String toolName;
