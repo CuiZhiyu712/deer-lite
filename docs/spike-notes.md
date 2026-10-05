@@ -29,3 +29,4 @@
 - 回归：纯文本问题（不带工具触发）正常 —— HTTP 200、0.8s、中文流式回答正常，日志无新增 `[SPIKE]` 行（未误触发工具）。
 - **R3 边界说明**：当前验证全部基于 GET + `Flux<String>`（Spring 默认 SSE 编码，`data:` 无空格、无 `event:` 字段）。POST SSE + 浏览器 `fetch` ReadableStream 读取方式尚未验证（T21 前端接入时补）；`SseEmitter` + 自定义事件名（tool_start/tool_result 等）的线上格式由 T7/T17 验证 —— 两种编码器行为可能不同，M1 事件层需自带格式测试。
 - 状态：完成（验证通过，装饰器方案确认可行）。
+- Usage 字段名（2.0.1 javap 核验）：`Usage.getPromptTokens()/getCompletionTokens()`，返回 Integer（消费方注意 Long/Integer 转换）

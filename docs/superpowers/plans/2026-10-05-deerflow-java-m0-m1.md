@@ -1516,6 +1516,7 @@ import com.deerflow.runtime.RunContext;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.definition.ToolMetadata;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1544,6 +1545,12 @@ public class ToolExecutionDecorator implements ToolCallback {
     @Override
     public ToolDefinition getToolDefinition() {
         return delegate.getToolDefinition();
+    }
+
+    /** 必须透传：框架会读 returnDirect 等元数据（T4 审查 javap 实测，勿删）。 */
+    @Override
+    public ToolMetadata getToolMetadata() {
+        return delegate.getToolMetadata();
     }
 
     @Override
@@ -2140,10 +2147,9 @@ public class UsageTrackingAdvisor implements StreamAdvisor {
                     || resp.chatResponse().getMetadata().getUsage() == null) {
                 return;
             }
-            // 字段名以实测为准：2.0 若为 getInputTokens/getOutputTokens 直接编译通过；
-            // 1.x 风格 getPromptTokens/getCompletionTokens 亦兼容（用 Number 规避类型差异）
-            Number in = resp.chatResponse().getMetadata().getUsage().getInputTokens();
-            Number out = resp.chatResponse().getMetadata().getUsage().getOutputTokens();
+            // 字段名已实测（2.0.1 经 javap 核验，见 docs/spike-notes.md）：getPromptTokens/getCompletionTokens 返回 Integer
+            Number in = resp.chatResponse().getMetadata().getUsage().getPromptTokens();
+            Number out = resp.chatResponse().getMetadata().getUsage().getCompletionTokens();
             Long inL = in == null ? null : in.longValue();
             Long outL = out == null ? null : out.longValue();
             usage.set(inL, outL);

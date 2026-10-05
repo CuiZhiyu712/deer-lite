@@ -257,10 +257,10 @@ write_todos → 多模型列表 API。
 
 ## 10. 风险与 M0 spike 验证点
 
-| # | 风险 | 应对 |
-|---|---|---|
-| R1 | Spring AI 2.0 流式下工具调用的可观测点（Advisor 钩子 vs ToolCallback 装饰器） | M0 spike 定版事件发射位置；默认装饰器方案 |
-| R2 | DeepSeek 经 OpenAI 兼容协议的流式工具调用（含多轮 tool call）兼容性 | M0 spike 实测 |
-| R3 | POST SSE + fetch ReadableStream 端到端兼容 | M0 spike 用最小前端页验证 |
-| R4 | `spring-ai-agent-utils`（incubating，Skills 用）与 2.0.0 兼容性 | M2 前验证，不阻塞 MVP |
-| R5 | 本机 Maven 缺失 | start.spring.io 骨架自带 `mvnw` |
+| # | 风险 | 应对 | 结论（2026-10-05 M0 实测） |
+|---|---|---|---|
+| R1 | Spring AI 2.0 流式下工具调用的可观测点 | M0 spike 定版事件发射位置 | ✅ 关闭：装饰器被框架调用；外层流不暴露中间态 → 装饰器为唯一方案；工具执行在 Reactor boundedElastic 线程 |
+| R2 | DeepSeek 经 OpenAI 兼容协议的流式工具调用 | M0 spike 实测 | ✅ 关闭：单轮/多轮 tool call 均正常 |
+| R3 | POST SSE + fetch ReadableStream 端到端兼容 | M0 spike 用最小前端页验证 | ⏳ 部分：GET+Flux+curl 已验证；POST/浏览器 fetch 由 T21 验证；SseEmitter 自定义事件名格式由 T7/T17 验证 |
+| R4 | `spring-ai-agent-utils`（incubating）与 2.0 兼容性 | M2 前验证 | ⏳ 挂起（M2） |
+| R5 | 本机 Maven 缺失 | start.spring.io 骨架自带 `mvnw` | ✅ 关闭（另：本机 JAVA_HOME=java17，需 `JAVA_HOME=/d/JAVAs/java21` 前缀构建） |
