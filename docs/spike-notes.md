@@ -12,3 +12,20 @@
 - 偏差修正记录：
   - 直接用 git-bash 单行 curl 传中文 query（`--data-urlencode` 传原始中文）会 400：Windows 下 curl 收到的 argv 已按本地代码页（GBK）转换，percent-encode 后为非法 UTF-8 字节，Tomcat 解码抛 `MalformedInputException`（`InvalidParameterException: Character decoding failed. Parameter [q] ... has been ignored`），请求在进 Controller 前即被拒。**属本地 curl/Windows 代码页问题，非应用缺陷**；改用 URL 中预编码 UTF-8（`%E7%94%A8...`）后全部正常。后续实测/联调：中文 query 一律预编码，或改用浏览器/前端发起。
   - `TaskStop` 停 `mvnw spring-boot:run` 后台任务后，fork 出的 java 子进程仍占 8080（PID 存活），需 `netstat -ano | grep ":8080"` 定位后 `taskkill //F //PID <pid>` 清理。
+
+## Task 4：工具循环与装饰器（date: 2026-10-05）
+- **核心结论（R1）：自研 ToolCallback 装饰器（`ToolExecutionDecorator`）在 Spring AI 2.0 工具循环中被框架正常调用 ✓**。实测两次（q=「现在几点了？必须调用工具查询」/「请调用工具告诉我服务器当前时间」），应用日志均出现 `[SPIKE] tool_start name=now args={}` 与 `[SPIKE] tool_result name=now ok=true ms=51/2 out="2026-10-05T23:37:33.69..."`。装饰器透传 `call(String, ToolContext)` 即可拦截全部工具执行 —— M1「装饰器发事件 + 从装饰器数据重建持久化」的默认策略成立，不依赖框架暴露中间态。
+- 多轮 tool call：**正常** ✓。模型调用工具 → 拿到结果 → 继续生成最终回答（回答中的时间与工具返回值一致，如 `23:37:33` / `23:45:11`）；两次 curl 均 HTTP 200、正常关闭连接、无错误帧。
+- **外层 stream 暴露的内容：不暴露工具轮中间态**。`.stream().content()` 的首条 SSE event 已是最终回答的首 token（实测首条分别以「现在是」「服务器」开头），工具轮（AssistantMessage(toolCalls)/ToolResponseMessage）期间客户端收不到任何 `data:` event —— 工具是框架在流内部同步执行的，调用方无法从 content 流感知。**结论：事件发射/持久化不能依赖外层流，装饰器方案是必需而非可选。**
+- 线程上下文：工具 `call` 执行在 Reactor `boundedElastic-*` 线程（实测 `boundedElastic-5`/`boundedElastic-118`），非 Tomcat 请求线程 —— M1 事件发射/上下文传递需按响应式线程模型设计。
+- 工具调用细节：无参工具模型传来 `args={}`（空 JSON 对象）；返回值为 JSON 引号包裹的字符串（`DefaultToolCallResultConverter` 默认行为，`out="..."`）。
+- **实际 API 偏差（计划代码 → 2.0.1 实际）**：
+  - 计划：`org.springframework.ai.tool.definition.ToolDefinition.builder(method)` —— **不存在**。2.0.1 中 `ToolDefinition` 接口仅有**无参** `builder()`（`DefaultToolDefinition.Builder` 需显式 `name/description/inputSchema` 三项非空）。
+  - 实际采用：`org.springframework.ai.tool.support.ToolDefinitions.builder(method)`（类名从 ToolDefinition→ToolDefinitions），返回 `DefaultToolDefinition.Builder`，自动派生 name（`ToolUtils.getToolName`）、description（可 `.description("获取当前服务器时间")` 覆盖）、inputSchema（`JsonSchemaGenerator.generateForMethodInput`）—— 仅此一处理解为偏差，其余计划代码零偏差。
+  - `MethodToolCallback.builder().toolDefinition(..).toolMethod(..).toolObject(..).build()` 与计划完全一致；`ToolMetadata`/`ToolCallResultConverter` 不设置时构造函数自动取默认值（`DEFAULT_TOOL_METADATA`/`DEFAULT_RESULT_CONVERTER`）。
+  - 备选路径 `org.springframework.ai.support.ToolCallbacks.from(Object...)` 确认存在（javap 验证），本次未采用。
+- 空 chunk 容忍：第二次实测响应共 28 个 event，其中 **2 个裸 `data:`（空内容）出现在流中部**（非仅尾部）；第一次 0 个。结论：下游必须容忍任意位置的空 chunk（T7/T17 事件编码按此设计）。
+- 失败路径：未实测（让工具抛异常需改代码）；DeepSeek 401/断流场景本次也未触发。留待 M1 正式版错误恢复逻辑与 T16 覆盖。
+- 回归：纯文本问题（不带工具触发）正常 —— HTTP 200、0.8s、中文流式回答正常，日志无新增 `[SPIKE]` 行（未误触发工具）。
+- **R3 边界说明**：当前验证全部基于 GET + `Flux<String>`（Spring 默认 SSE 编码，`data:` 无空格、无 `event:` 字段）。POST SSE + 浏览器 `fetch` ReadableStream 读取方式尚未验证（T21 前端接入时补）；`SseEmitter` + 自定义事件名（tool_start/tool_result 等）的线上格式由 T7/T17 验证 —— 两种编码器行为可能不同，M1 事件层需自带格式测试。
+- 状态：完成（验证通过，装饰器方案确认可行）。
