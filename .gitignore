@@ -1,0 +1,8 @@
+target/
+workspace/
+.env
+application-local.yml
+*.log
+.idea/
+*.iml
+.vscode/
