@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: deerflow-java
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:mysql://localhost:3306/deerflow?useSSL=false&serverTimezone=UTC&characterEncoding=utf8
+    username: root
+    password: deerflow
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  ai:
+    openai:
+      api-key: ${DEEPSEEK_API_KEY:missing-key-tell-user}
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-chat
+
+deerflow:
+  sandbox:
+    root: ./workspace
+    timeout-seconds: 30
+    max-output-bytes: 262144
+  limits:
+    max-tool-rounds: 40
+    max-run-seconds: 600
+    max-run-tokens: 200000
+
+server:
+  port: 8080
