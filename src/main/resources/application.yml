@@ -5,7 +5,7 @@ spring:
     virtual:
       enabled: true
   datasource:
-    url: jdbc:mysql://localhost:3306/deerflow?useSSL=false&serverTimezone=UTC&characterEncoding=utf8
+    url: jdbc:mysql://localhost:3306/deerflow?useSSL=false&serverTimezone=UTC&characterEncoding=utf8&allowPublicKeyRetrieval=true
     username: root
     password: deerflow
   jpa:
@@ -17,8 +17,7 @@ spring:
       api-key: ${DEEPSEEK_API_KEY:missing-key-tell-user}
       base-url: https://api.deepseek.com
       chat:
-        options:
-          model: deepseek-chat
+        model: deepseek-chat
 
 deerflow:
   sandbox:
