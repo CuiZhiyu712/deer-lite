@@ -30,3 +30,12 @@
 - **R3 边界说明**：当前验证全部基于 GET + `Flux<String>`（Spring 默认 SSE 编码，`data:` 无空格、无 `event:` 字段）。POST SSE + 浏览器 `fetch` ReadableStream 读取方式尚未验证（T21 前端接入时补）；`SseEmitter` + 自定义事件名（tool_start/tool_result 等）的线上格式由 T7/T17 验证 —— 两种编码器行为可能不同，M1 事件层需自带格式测试。
 - 状态：完成（验证通过，装饰器方案确认可行）。
 - Usage 字段名（2.0.1 javap 核验）：`Usage.getPromptTokens()/getCompletionTokens()`，返回 Integer（消费方注意 Long/Integer 转换）
+
+## Task 13：Advisor API 实测（date: 2026-10-06）
+- StreamAdvisor/StreamAdvisorChain 实际签名：**与计划完全一致**（javap 核验 `spring-ai-client-chat-2.0.1.jar`）。`StreamAdvisor extends Advisor extends Ordered`，唯一方法 `Flux<ChatClientResponse> adviseStream(ChatClientRequest, StreamAdvisorChain)`；chain 侧 `Flux<ChatClientResponse> nextStream(ChatClientRequest)`（另有 `getStreamAdvisors()`/`copy(StreamAdvisor)`，本期未用）。order 走 `Ordered.getOrder()`（非 advisor 自定义常量名），`Advisor` 仅额外要求 `getName()`。
+- ChatClientRequest.mutate() 形态：**存在**，返回 `ChatClientRequest$Builder`，字段级方法 `prompt(Prompt)` / `context(Map<String,? extends Object>)` / `context(String,Object)` / `build()`；`ChatClientRequest`（record：`Prompt, Map<String,Object>`）与 `ChatClientResponse`（`ChatResponse, Map`）同构，均有 `copy()`。`Prompt.getOptions()` 返回 `ChatOptions`（javap 另有返回 `ModelOptions` 的桥方法，编译器自动选具体类型）；`Prompt(List<Message>, ChatOptions)` 构造器存在。消息侧：`getText()` 继承自 `AbstractMessage`（`Message`→`Content` 接口在 spring-ai-commons 包）；`ToolResponseMessage.ToolResponse.responseData()` 存在。
+- **结论：三个 Advisor 计划代码在 2.0.1 下零 API 修正编译通过**，ORDER 常量（ContextAssembly 0 / TokenBudget 100 / UsageTracking 200）可直接用于 ChatClient 注册排序。
+- 其它偏差与修正（非 Advisor API 层面）：
+  1. `TokenBudgetAdvisor.pruneMessages` 由包级改 **public**：计划测试类在 `com.deerflow.agent` 包，实现在 `com.deerflow.agent.advisors`，跨包访问包级方法不可编译（计划注释"包级可见便于单测"与测试文件包名自相矛盾）。
+  2. `PromptBuilderTest` 工作区路径断言改平台无关：Windows 下 `Path.of("/tmp/ws/s1").toString()` == `\tmp\ws\s1`（实测），断言改用同一 `Path.toString()` 表达式；`PromptBuilder` 实现未动（照常渲染平台原生路径）。
+- 供 T15/T16 参考：UsageTrackingAdvisor 以 `doOnNext` 从每轮 `ChatClientResponse.chatResponse().getMetadata().getUsage()` 取值——字段链任一层可为 null，必须逐层短路（已实现）；token 字段 Integer（同 T4 记录），`Number#longValue()` 收宽安全。T13 实测结果：`TokenBudgetAdvisorTest` 2 PASS + `PromptBuilderTest` 1 PASS，全量 41 PASS。
