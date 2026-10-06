@@ -8,7 +8,9 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 单次 run 的 SSE 出口。线程安全：run 虚拟线程与 ping 定时线程都会写。
+ * 单次 run 的 SSE 出口。线程安全：
+ * - 所有 emitter 触达（send/complete/completeWithError）都在同一把对象锁内，与 closed 检查互斥；
+ * - 断连或发送失败时关闭 sink 并 completeWithError，避免无超时 SseEmitter 把客户端挂死。
  */
 public class EventSink {
 
@@ -24,20 +26,20 @@ public class EventSink {
     }
 
     public void send(AgentEvent event) {
-        if (closed.get()) {
-            return;
-        }
         try {
             String json = objectMapper.writeValueAsString(event);
             emit(event.type(), json);
         } catch (Exception e) {
-            markBroken();
+            markBroken(e);
         }
     }
 
-    /** 便于测试覆写。 */
+    /** 便于测试覆写；closed 检查在锁内，与 complete/fail 同锁，保证 complete 之后不再触达 emitter。 */
     protected void emit(String name, Object data) throws Exception {
         synchronized (this) {
+            if (closed.get()) {
+                return;
+            }
             emitter.send(SseEmitter.event().name(name).data(data));
         }
     }
@@ -48,15 +50,22 @@ public class EventSink {
         }
     }
 
-    public void fail(Throwable t) {
+    public synchronized void fail(Throwable t) {
         if (closed.compareAndSet(false, true)) {
             emitter.completeWithError(t);
         }
     }
 
-    private void markBroken() {
+    private void markBroken(Throwable cause) {
         if (closed.compareAndSet(false, true)) {
-            log.warn("SSE sink broken (client disconnected?), run continues and will persist");
+            log.warn("SSE send failed; closing sink (client likely disconnected or payload error)", cause);
+            try {
+                emitter.completeWithError(cause);
+            } catch (Exception ignore) {
+                // emitter 已断开时 completeWithError 也可能抛；无需处理
+            }
+        } else {
+            log.debug("SSE send failed after sink already closed", cause);
         }
     }
 

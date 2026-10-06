@@ -22,6 +22,9 @@ public sealed interface AgentEvent {
     }
 
     record TodoUpdate(List<TodoItem> todos) implements AgentEvent {
+        public TodoUpdate {
+            todos = List.copyOf(todos);
+        }
         public String type() { return "todo_update"; }
     }
 
