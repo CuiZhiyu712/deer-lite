@@ -47,4 +47,28 @@ class WorkspaceManagerTest {
         assertThatThrownBy(() -> mgr().resolveSafe("s1", "..\\..\\evil"))
                 .isInstanceOf(SandboxSecurityException.class);
     }
+
+    @Test
+    void rejectsNullAndBlankPath() {
+        assertThatThrownBy(() -> mgr().resolveSafe("s1", null)).isInstanceOf(SandboxSecurityException.class);
+        assertThatThrownBy(() -> mgr().resolveSafe("s1", "   ")).isInstanceOf(SandboxSecurityException.class);
+    }
+
+    @Test
+    void rejectsTrailingDotOrSpaceSegment() {
+        assertThatThrownBy(() -> mgr().resolveSafe("s1", "evil./x")).isInstanceOf(SandboxSecurityException.class);
+        assertThatThrownBy(() -> mgr().resolveSafe("s1", "evil /x")).isInstanceOf(SandboxSecurityException.class);
+    }
+
+    @Test
+    void rejectsWindowsReservedNames() {
+        assertThatThrownBy(() -> mgr().resolveSafe("s1", "CON")).isInstanceOf(SandboxSecurityException.class);
+        assertThatThrownBy(() -> mgr().resolveSafe("s1", "sub/com1.txt")).isInstanceOf(SandboxSecurityException.class);
+    }
+
+    @Test
+    void allowsDotAndInnerSegments() {
+        assertThat(mgr().resolveSafe("s1", ".")).isEqualTo(mgr().sessionDir("s1"));
+        assertThat(mgr().resolveSafe("s1", "a/b/c.txt").getFileName().toString()).isEqualTo("c.txt");
+    }
 }
