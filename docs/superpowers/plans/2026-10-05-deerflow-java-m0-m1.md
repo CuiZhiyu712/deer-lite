@@ -1105,7 +1105,8 @@ class FileToolsTest {
     void strReplaceReplacesFirstOccurrenceOrErrors() {
         var t = tools();
         t.writeFile("s1", "a.txt", "foo bar foo");
-        String out = t.strReplace("s1", "a.txt", "foo", "baz");
+        t.strReplace("s1", "a.txt", "foo", "baz");
+        String out = t.readFile("s1", "a.txt");
         assertThat(out).contains("baz bar foo");
         assertThatThrownBy(() -> t.strReplace("s1", "a.txt", "not-exist", "x"))
                 .hasMessageContaining("未找到");
