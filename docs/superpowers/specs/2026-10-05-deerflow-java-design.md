@@ -153,11 +153,13 @@ deerflow-java/
 | `run_start` | {runId, sessionId} | run 开始 |
 | `text_delta` | {delta} | 模型文本增量 |
 | `tool_start` | {id, name, argsPreview} | 工具开始执行 |
-| `tool_result` | {id, status, outputPreview, durationMs} | 工具执行结束 |
+| `tool_result` | {id, name, ok, outputPreview, durationMs} | 工具执行结束 |
 | `todo_update` | {todos[]} | write_todos 更新 |
 | `usage` | {inputTokens, outputTokens} | 每轮用量 |
 | `run_end` | {status: done/failed/cancelled, error?} | 结束 |
 | `ping` | {} | 心跳（15s，防代理断连） |
+
+> 注（2026-10-07 修订）：tool_result 实际字段为 {id, name, ok, outputPreview, durationMs}（以 AgentEvent.java 为准）。
 
 ### 5.5 REST API
 

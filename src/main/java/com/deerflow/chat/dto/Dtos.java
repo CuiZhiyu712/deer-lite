@@ -11,5 +11,4 @@ public final class Dtos {
     public record SessionDto(String id, String title, String model, String todosJson, Instant updatedAt) {}
     public record MessageDto(String id, String role, String content, String toolCallsJson,
                              String toolCallId, String toolName, Instant createdAt) {}
-    public record TodoItem(String content, String status) {}
 }
