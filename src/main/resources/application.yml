@@ -4,6 +4,10 @@ spring:
   threads:
     virtual:
       enabled: true
+  http:
+    clients:
+      connect-timeout: 5s
+      read-timeout: 20s
   datasource:
     url: jdbc:mysql://localhost:3307/deerflow?useSSL=false&serverTimezone=UTC&characterEncoding=utf8&allowPublicKeyRetrieval=true
     username: root

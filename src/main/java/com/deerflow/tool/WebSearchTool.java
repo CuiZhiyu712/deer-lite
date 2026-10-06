@@ -22,6 +22,9 @@ public class WebSearchTool {
 
     @SuppressWarnings("unchecked")
     public String webSearch(String query, int maxResults) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return "错误：未配置 TAVILY_API_KEY，web_search 不可用（请在环境变量或 application-local.yml 配置）";
+        }
         Map<String, Object> body = Map.of(
                 "api_key", apiKey,
                 "query", query,
@@ -31,6 +34,9 @@ public class WebSearchTool {
                 .body(body)
                 .retrieve()
                 .body(Map.class);
+        if (resp == null) {
+            return "搜索失败：空响应";
+        }
         List<Map<String, Object>> results = (List<Map<String, Object>>) resp.get("results");
         if (results == null || results.isEmpty()) {
             return "未找到相关结果";
@@ -41,6 +47,6 @@ public class WebSearchTool {
               .append(r.get("url")).append("\n  ")
               .append(r.get("content")).append("\n");
         }
-        return sb.toString();
+        return sb.length() > 20_000 ? sb.substring(0, 20_000) + "\n[内容截断]" : sb.toString();
     }
 }

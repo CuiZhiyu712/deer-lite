@@ -39,4 +39,18 @@ class WebToolsTest {
         assertThat(tool.webFetch("https://example.com")).contains("# Title");
         server.verify();
     }
+
+    @Test
+    void jinaRejectsNonHttpUrl() {
+        var tool = new WebFetchTool(RestClient.builder());
+        assertThat(tool.webFetch("/169.254.169.254/latest/meta-data/")).contains("必须以");
+        assertThat(tool.webFetch("ftp://example.com")).contains("必须以");
+        assertThat(tool.webFetch(null)).contains("必须以");
+    }
+
+    @Test
+    void tavilyBlankKeyShortCircuits() {
+        var tool = new WebSearchTool(RestClient.builder(), "");
+        assertThat(tool.webSearch("x", 5)).contains("未配置");
+    }
 }

@@ -15,6 +15,9 @@ public class WebFetchTool {
     }
 
     public String webFetch(String url) {
+        if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) {
+            return "错误：url 必须以 http:// 或 https:// 开头";
+        }
         // 用 URI 参数绕过模板变量严格编码：.uri("/{url}", url) 会把 :// 编码成 %3A%2F%2F（实测）
         String text = http.get().uri(URI.create("/" + url)).retrieve().body(String.class);
         if (text == null) {
