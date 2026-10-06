@@ -40,7 +40,7 @@ docker compose up -d            # MySQL 8
 
 MySQL 由 `docker-compose.yml` 提供（端口 3307，因本机 3306 常被占用）。
 
-首次使用复制 `application-local.yml.example` 为 `src/main/resources/application-local.yml` 并填入 `spring.ai.openai.api-key`（DeepSeek）。web_search/web_fetch 需要 `TAVILY_API_KEY` / JINA 服务可达。
+首次使用复制 `application-local.yml.example` 为项目根目录的 `application-local.yml` 并填入 `spring.ai.openai.api-key`（DeepSeek）。web_search/web_fetch 需要 `TAVILY_API_KEY` / JINA 服务可达。
 
 ## 示例任务（演示脚本）
 
