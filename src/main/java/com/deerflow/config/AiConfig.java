@@ -8,8 +8,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.ReflectionUtils;
 
-import com.deerflow.tool.ToolExecutionDecorator;
-
 @Configuration
 public class AiConfig {
 
@@ -18,17 +16,18 @@ public class AiConfig {
         return builder.build();
     }
 
+    /** spike 已结束：返回裸工具，不再包装饰器（装饰由 AgentService 每 run 施加）。 */
     @Bean
     ToolCallback timeTool() {
         var method = ReflectionUtils.findMethod(TimeTools.class, "now");
         // 计划代码为 ToolDefinition.builder(method)；2.0.1 实际在 ToolDefinitions 支持类上
-        return new ToolExecutionDecorator(MethodToolCallback.builder()
+        return MethodToolCallback.builder()
                 .toolDefinition(ToolDefinitions.builder(method)
                         .description("获取当前服务器时间")
                         .build())
                 .toolMethod(method)
                 .toolObject(new TimeTools())
-                .build());
+                .build();
     }
 
     static class TimeTools {
