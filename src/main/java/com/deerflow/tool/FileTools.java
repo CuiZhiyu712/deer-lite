@@ -27,6 +27,9 @@ public class FileTools {
 
     public String readFile(String sessionId, String path) {
         Path p = workspace.resolveSafe(sessionId, path);
+        if (Files.isDirectory(p)) {
+            return "错误：目标是目录，不是文件: " + path;
+        }
         if (!Files.isRegularFile(p)) {
             return "错误：文件不存在 " + path;
         }
@@ -38,7 +41,13 @@ public class FileTools {
     }
 
     public String writeFile(String sessionId, String path, String content) {
+        if (content == null) {
+            throw new IllegalArgumentException("content 不能为 null（写空文件请显式传空字符串）");
+        }
         Path p = workspace.resolveSafe(sessionId, path);
+        if (Files.isDirectory(p)) {
+            return "错误：目标是目录，无法写入: " + path;
+        }
         try {
             if (p.getParent() != null) {
                 Files.createDirectories(p.getParent());
@@ -51,7 +60,16 @@ public class FileTools {
     }
 
     public String strReplace(String sessionId, String path, String oldText, String newText) {
+        if (oldText == null || oldText.isEmpty()) {
+            throw new IllegalArgumentException("oldText 不能为空");
+        }
+        if (newText == null) {
+            throw new IllegalArgumentException("newText 不能为 null（删除内容请显式传空字符串）");
+        }
         Path p = workspace.resolveSafe(sessionId, path);
+        if (Files.isDirectory(p)) {
+            return "错误：目标是目录，不是文件: " + path;
+        }
         if (!Files.isRegularFile(p)) {
             return "错误：文件不存在 " + path;
         }
@@ -59,7 +77,7 @@ public class FileTools {
             String content = Files.readString(p);
             int idx = content.indexOf(oldText);
             if (idx < 0) {
-                throw new IllegalArgumentException("未找到要替换的内容: " + oldText);
+                return "错误：未找到要替换的内容: " + oldText;
             }
             Files.writeString(p, content.substring(0, idx) + newText + content.substring(idx + oldText.length()));
             return "已替换 " + path;

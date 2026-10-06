@@ -33,8 +33,24 @@ class FileToolsTest {
         t.strReplace("s1", "a.txt", "foo", "baz");
         String out = t.readFile("s1", "a.txt");
         assertThat(out).contains("baz bar foo");
-        assertThatThrownBy(() -> t.strReplace("s1", "a.txt", "not-exist", "x"))
-                .hasMessageContaining("未找到");
+        assertThat(t.strReplace("s1", "a.txt", "not-exist", "x")).contains("未找到");
+    }
+
+    @Test
+    void guardsNullAndDirectoryInputs() {
+        var t = tools();
+        t.writeFile("s1", "d/x.txt", "1");
+        assertThatThrownBy(() -> t.strReplace("s1", "a.txt", null, "x"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> t.strReplace("s1", "a.txt", "", "x"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> t.strReplace("s1", "a.txt", "a", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> t.writeFile("s1", "a.txt", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(t.readFile("s1", "d")).contains("目录");
+        assertThat(t.writeFile("s1", "d", "x")).contains("目录");
+        assertThat(t.strReplace("s1", "missing.txt", "a", "b")).contains("不存在");
     }
 
     @Test
