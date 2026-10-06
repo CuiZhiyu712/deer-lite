@@ -37,10 +37,11 @@ public class ToolExecutionDecorator implements ToolCallback {
         return delegate.getToolDefinition();
     }
 
-    /** 必须透传：框架会读 returnDirect 等元数据（T4 审查 javap 实测，勿删）。 */
+    /** 必须透传：框架会读 returnDirect 等元数据（T4/T11 审查 javap 实测，勿删）；null 防御。 */
     @Override
     public ToolMetadata getToolMetadata() {
-        return delegate.getToolMetadata();
+        ToolMetadata metadata = delegate.getToolMetadata();
+        return metadata != null ? metadata : ToolMetadata.builder().build();
     }
 
     @Override
@@ -51,25 +52,29 @@ public class ToolExecutionDecorator implements ToolCallback {
     @Override
     public String call(String toolInput, ToolContext toolContext) {
         String name = getToolDefinition().name();
+        if (ctx.isCancelled()) {
+            // 取消先判且不消耗轮次（T11 审查）
+            return "错误：用户已取消本次运行，请停止调用工具。";
+        }
         int round = roundCounter.incrementAndGet();
         if (round > maxRounds) {
             return "错误：本次运行工具调用已达上限(" + maxRounds + ")，请停止调用工具并直接给出最终答复。";
-        }
-        if (ctx.isCancelled()) {
-            return "错误：用户已取消本次运行，请停止调用工具。";
         }
         String callId = UUID.randomUUID().toString();
         sink.send(new AgentEvent.ToolStart(callId, name, preview(toolInput, 300)));
         long t0 = System.currentTimeMillis();
         try {
             String out = delegate.call(toolInput, toolContext);
-            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, out, true));
-            sink.send(new AgentEvent.ToolResult(callId, name, true, preview(out, 500), System.currentTimeMillis() - t0));
+            long ms = System.currentTimeMillis() - t0;
+            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, out, true, ms));
+            sink.send(new AgentEvent.ToolResult(callId, name, true, preview(out, 500), ms));
             return out;
         } catch (Exception e) {
-            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, String.valueOf(e.getMessage()), false));
-            sink.send(new AgentEvent.ToolResult(callId, name, false, preview(String.valueOf(e.getMessage()), 300), System.currentTimeMillis() - t0));
-            return "工具执行失败(" + name + "): " + e.getMessage() + "。请调整参数或换一种方式，不要重复同样的调用。";
+            String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            long ms = System.currentTimeMillis() - t0;
+            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, msg, false, ms));
+            sink.send(new AgentEvent.ToolResult(callId, name, false, preview(msg, 300), ms));
+            return "工具执行失败(" + name + "): " + msg + "。请调整参数或换一种方式，不要重复同样的调用。";
         }
     }
 

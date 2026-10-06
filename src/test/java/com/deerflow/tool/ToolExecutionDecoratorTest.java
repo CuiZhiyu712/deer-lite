@@ -51,10 +51,13 @@ class ToolExecutionDecoratorTest {
     @Test
     void convertsExceptionToTextForModelRecovery() {
         var sink = new CollectingSink();
-        var deco = new ToolExecutionDecorator(fake(true), sink, new AtomicInteger(), 10, new RunContext());
+        var ctx = new RunContext();
+        var deco = new ToolExecutionDecorator(fake(true), sink, new AtomicInteger(), 10, ctx);
         String out = deco.call("hi");
         assertThat(out).contains("工具执行失败").contains("boom");
         assertThat(((AgentEvent.ToolResult) sink.events.get(1)).ok()).isFalse();
+        assertThat(ctx.toolTraces()).hasSize(1);
+        assertThat(ctx.toolTraces().get(0).ok()).isFalse();
     }
 
     @Test
@@ -79,5 +82,19 @@ class ToolExecutionDecoratorTest {
         ctx.requestCancel();
         String out = deco.call("y");
         assertThat(out).contains("已取消");
+    }
+
+    @Test
+    void passesThroughToolMetadata() {
+        ToolCallback delegate = new ToolCallback() {
+            public ToolDefinition getToolDefinition() { return DEF; }
+            public org.springframework.ai.tool.metadata.ToolMetadata getToolMetadata() {
+                return org.springframework.ai.tool.metadata.ToolMetadata.builder().returnDirect(true).build();
+            }
+            public String call(String input) { return call(input, null); }
+            public String call(String input, org.springframework.ai.chat.model.ToolContext ctx) { return "x"; }
+        };
+        var deco = new ToolExecutionDecorator(delegate, new CollectingSink(), new AtomicInteger(), 10, new RunContext());
+        assertThat(deco.getToolMetadata().returnDirect()).isTrue();
     }
 }
