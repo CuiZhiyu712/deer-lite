@@ -12,7 +12,8 @@ import reactor.core.publisher.Flux;
 /** 汇总每轮 usage → RunUsage + usage 事件。per-run 实例。 */
 public class UsageTrackingAdvisor implements StreamAdvisor {
 
-    public static final int ORDER = 200;
+    /** 必须置于工具循环（ToolCallingAdvisor，order≈-2147483348）之外：只在此处能看到框架累计后的最终 usage（T13 审查字节码实测；循环内层每轮只看到原始值）。 */
+    public static final int ORDER = org.springframework.core.Ordered.HIGHEST_PRECEDENCE + 1;
 
     private final RunUsage usage;
     private final EventSink sink;

@@ -14,7 +14,6 @@ import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * 上下文预算：估算超限时保留全部 system + 最近 N 条（插入省略提示）。
@@ -66,6 +65,11 @@ public class TokenBudgetAdvisor implements StreamAdvisor {
         List<Message> others = messages.stream().filter(m -> !(m instanceof SystemMessage)).toList();
         List<Message> kept = new ArrayList<>(systems);
         int from = Math.max(0, others.size() - keepRecentMessages);
+        // 窗口不得以孤立的 ToolResponseMessage 开头（其对应的 assistant(tool_calls) 被裁掉会让 API 400），
+        // 因此把边界向前推过连续的 tool 响应（T13 审查实测 DeepSeek 约束）
+        while (from < others.size() && others.get(from) instanceof ToolResponseMessage) {
+            from++;
+        }
         if (from > 0) {
             kept.add(new UserMessage("[提示] 更早的 " + from + " 条历史消息因上下文长度限制已被省略。"));
         }
@@ -74,19 +78,24 @@ public class TokenBudgetAdvisor implements StreamAdvisor {
     }
 
     static int estimateTokens(List<Message> messages) {
-        int chars = messages.stream().mapToInt(m -> textOf(m).length()).sum();
+        int chars = messages.stream().mapToInt(TokenBudgetAdvisor::charsOf).sum();
         return chars / 2; // 中英混合粗估：约 2 字符/token
     }
 
-    static String textOf(Message m) {
+    /** 计入 assistant 的 toolCalls 参数长度（write_file 等大参数的主要来源，T13 审查指出原实现漏计）。 */
+    public static int charsOf(Message m) {
         if (m instanceof ToolResponseMessage tr) {
             return tr.getResponses().stream()
-                    .map(ToolResponseMessage.ToolResponse::responseData)
-                    .collect(Collectors.joining());
+                    .mapToInt(r -> r.responseData() == null ? 0 : r.responseData().length())
+                    .sum();
         }
-        if (m instanceof AssistantMessage am && am.getText() == null) {
-            return "";
+        if (m instanceof AssistantMessage am) {
+            int text = am.getText() == null ? 0 : am.getText().length();
+            int args = am.getToolCalls() == null ? 0 : am.getToolCalls().stream()
+                    .mapToInt(tc -> tc.arguments() == null ? 0 : tc.arguments().length())
+                    .sum();
+            return text + args;
         }
-        return m.getText() == null ? "" : m.getText();
+        return m.getText() == null ? 0 : m.getText().length();
     }
 }

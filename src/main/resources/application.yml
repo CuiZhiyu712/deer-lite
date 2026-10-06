@@ -22,6 +22,9 @@ spring:
       base-url: https://api.deepseek.com
       chat:
         model: deepseek-chat
+        options:
+          stream-options:
+            include-usage: true
 
 deerflow:
   sandbox:
