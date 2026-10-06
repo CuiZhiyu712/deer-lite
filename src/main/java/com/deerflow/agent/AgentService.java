@@ -3,6 +3,7 @@ package com.deerflow.agent;
 import com.deerflow.agent.advisors.ContextAssemblyAdvisor;
 import com.deerflow.agent.advisors.TokenBudgetAdvisor;
 import com.deerflow.agent.advisors.UsageTrackingAdvisor;
+import com.deerflow.config.ModelRegistry;
 import com.deerflow.event.AgentEvent;
 import com.deerflow.event.EventSink;
 import com.deerflow.persistence.ChatSession;
@@ -57,6 +58,7 @@ public class AgentService {
     }
 
     private final ChatClient.Builder chatClientBuilder;
+    private final ModelRegistry modelRegistry;
     private final ObjectMapper objectMapper;
     private final ChatSessionRepository sessionRepo;
     private final MessageRepository messageRepo;
@@ -82,6 +84,7 @@ public class AgentService {
     private final Set<String> activeSessions = ConcurrentHashMap.newKeySet();
 
     public AgentService(ChatClient.Builder chatClientBuilder,
+                        ModelRegistry modelRegistry,
                         ObjectMapper objectMapper,
                         ChatSessionRepository sessionRepo,
                         MessageRepository messageRepo,
@@ -96,6 +99,7 @@ public class AgentService {
                         @Value("${deerflow.limits.max-run-seconds:600}") long maxRunSeconds,
                         @Value("${deerflow.limits.max-run-tokens:200000}") long maxRunTokens) {
         this.chatClientBuilder = chatClientBuilder;
+        this.modelRegistry = modelRegistry;
         this.objectMapper = objectMapper;
         this.sessionRepo = sessionRepo;
         this.messageRepo = messageRepo;
@@ -168,7 +172,8 @@ public class AgentService {
                     .map(cb -> (ToolCallback) new ToolExecutionDecorator(cb, sink, counter, maxToolRounds, ctx))
                     .toList();
 
-            ChatClient client = chatClientBuilder.clone()
+            ChatClient registryClient = modelRegistry.clientFor(session.getModel());
+            ChatClient client = (registryClient != null ? registryClient.mutate() : chatClientBuilder.clone())
                     .defaultSystem(PromptBuilder.systemPrompt(workspace))
                     .defaultAdvisors(
                             new ContextAssemblyAdvisor(session.getId(), workspace.toString()),

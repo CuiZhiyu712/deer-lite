@@ -35,6 +35,11 @@ deerflow:
     max-tool-rounds: 40
     max-run-seconds: 600
     max-run-tokens: 200000
+  models:
+    - name: deepseek-chat
+      base-url: https://api.deepseek.com
+      api-key: ${DEEPSEEK_API_KEY:missing-key-tell-user}
+      model: deepseek-chat
 
 server:
   port: 8080

@@ -5,6 +5,7 @@ import com.deerflow.chat.dto.Dtos.CreateSessionRequest;
 import com.deerflow.chat.dto.Dtos.MessageDto;
 import com.deerflow.chat.dto.Dtos.RunRequest;
 import com.deerflow.chat.dto.Dtos.SessionDto;
+import com.deerflow.config.ModelRegistry;
 import com.deerflow.persistence.ChatSession;
 import com.deerflow.persistence.ChatSessionRepository;
 import com.deerflow.persistence.MessageRepository;
@@ -25,13 +26,16 @@ public class ChatController {
     private final ChatSessionRepository sessionRepo;
     private final MessageRepository messageRepo;
     private final AgentService agentService;
+    private final ModelRegistry modelRegistry;
 
     public ChatController(ChatSessionRepository sessionRepo,
                           MessageRepository messageRepo,
-                          AgentService agentService) {
+                          AgentService agentService,
+                          ModelRegistry modelRegistry) {
         this.sessionRepo = sessionRepo;
         this.messageRepo = messageRepo;
         this.agentService = agentService;
+        this.modelRegistry = modelRegistry;
     }
 
     @PostMapping("/sessions")
@@ -45,6 +49,11 @@ public class ChatController {
     @GetMapping("/sessions")
     public List<SessionDto> list() {
         return sessionRepo.findAllByOrderByUpdatedAtDesc().stream().map(this::toDto).toList();
+    }
+
+    @GetMapping("/models")
+    public List<String> models() {
+        return modelRegistry.names();
     }
 
     @GetMapping("/sessions/{id}")
@@ -64,6 +73,12 @@ public class ChatController {
     @PostMapping(value = "/sessions/{id}/runs", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter run(
             @PathVariable String id, @RequestBody RunRequest req, HttpServletResponse response) {
+        if (req.model() != null && !req.model().isBlank()) {
+            var session = sessionRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("会话不存在: " + id));
+            session.setModel(req.model());
+            session.touch();
+            sessionRepo.save(session);
+        }
         var started = agentService.startRun(id, req.input());
         // 启动即失败（如会话忙）时会抛异常；能走到这里说明 run 已受理——
         // 把 runId 放进响应头，前端无需等 run_start 事件即可启用停止按钮（T16 审查 M2）
