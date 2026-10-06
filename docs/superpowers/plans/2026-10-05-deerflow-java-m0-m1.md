@@ -1839,6 +1839,8 @@ git commit -m "feat(tool): web search (Tavily) and web fetch (Jina) tools"
 ---
 
 > **T12 实现期间修正（commit 3abd17b + 后续 fix）**：`WebFetchTool` 用 `URI.create` 绕过模板编码并**强制要求 http(s) 前缀**（防 `"/"+url` 的 authority 劫持 SSRF）；`WebSearchTool` 空 key 短路 + null 响应防御 + 输出截断；`application.yml` 必须配置 `spring.http.clients.connect-timeout/read-timeout`——**无超时的 HTTP 调用会让 run 永久挂起，取消与限额全部失效（T12 审查实测证据链）**。
+>
+> **T13 实现期间修正（T13 审查字节码实测）**：① TokenBudget 裁剪边界必须前推过连续 `ToolResponseMessage`（否则切断 assistant(tool_calls)/tool 配对，DeepSeek 400）；② `UsageTrackingAdvisor.ORDER` 必须为 `Ordered.HIGHEST_PRECEDENCE + 1`（**置于工具循环 ToolCallingAdvisor(-2147483348) 之外**，才能看到框架累计后的 usage——advisor 在循环内层每轮只看到原始值）；③ `estimateTokens` 计入 assistant toolCalls 参数长度；④ `application.yml` 增加 `spring.ai.openai.chat.options.stream-options.include-usage: true`（DeepSeek 默认不回传流式 usage，不加则 usage 事件永不出现、token 限额静默失效）。
 
 ### Task 13: 系统提示词、PromptBuilder 与三个 Advisor
 
@@ -2081,7 +2083,11 @@ import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
+
+/**
+ * 上下文预算：估算超限时保留全部 system + 最近 N 条（插入省略提示）。
+ * 二期由 LLM 摘要压缩替代（同插槽）。
+ */
 
 /**
  * 上下文预算：估算超限时保留全部 system + 最近 N 条（插入省略提示）。
@@ -2130,6 +2136,11 @@ public class TokenBudgetAdvisor implements StreamAdvisor {
         List<Message> others = messages.stream().filter(m -> !(m instanceof SystemMessage)).toList();
         List<Message> kept = new ArrayList<>(systems);
         int from = Math.max(0, others.size() - keepRecentMessages);
+        // 窗口不得以孤立的 ToolResponseMessage 开头（其对应的 assistant(tool_calls) 被裁掉会让 API 400），
+        // 因此把边界向前推过连续的 tool 响应（T13 审查实测 DeepSeek 约束）
+        while (from < others.size() && others.get(from) instanceof ToolResponseMessage) {
+            from++;
+        }
         if (from > 0) {
             kept.add(new UserMessage("[提示] 更早的 " + from + " 条历史消息因上下文长度限制已被省略。"));
         }
@@ -2138,20 +2149,25 @@ public class TokenBudgetAdvisor implements StreamAdvisor {
     }
 
     static int estimateTokens(List<Message> messages) {
-        int chars = messages.stream().mapToInt(m -> textOf(m).length()).sum();
+        int chars = messages.stream().mapToInt(TokenBudgetAdvisor::charsOf).sum();
         return chars / 2; // 中英混合粗估：约 2 字符/token
     }
 
-    static String textOf(Message m) {
+    /** 计入 assistant 的 toolCalls 参数长度（write_file 等大参数的主要来源，T13 审查指出原实现漏计）。 */
+    public static int charsOf(Message m) {
         if (m instanceof ToolResponseMessage tr) {
             return tr.getResponses().stream()
-                    .map(ToolResponseMessage.ToolResponse::responseData)
-                    .collect(Collectors.joining());
+                    .mapToInt(r -> r.responseData() == null ? 0 : r.responseData().length())
+                    .sum();
         }
-        if (m instanceof AssistantMessage am && am.getText() == null) {
-            return "";
+        if (m instanceof AssistantMessage am) {
+            int text = am.getText() == null ? 0 : am.getText().length();
+            int args = am.getToolCalls() == null ? 0 : am.getToolCalls().stream()
+                    .mapToInt(tc -> tc.arguments() == null ? 0 : tc.arguments().length())
+                    .sum();
+            return text + args;
         }
-        return m.getText() == null ? "" : m.getText();
+        return m.getText() == null ? 0 : m.getText().length();
     }
 }
 ```
