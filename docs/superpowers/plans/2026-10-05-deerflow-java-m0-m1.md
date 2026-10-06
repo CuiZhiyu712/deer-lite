@@ -1275,7 +1275,10 @@ class ShellRunnerTest {
 
     @Test
     void truncatesHugeOutput() {
-        var r = runner(10, 100).run(dir, "printf 'x%.0s' {1..10000}");
+        String cmd = System.getProperty("os.name").toLowerCase().contains("win")
+                ? "for /L %i in (1,1,20000) do @echo xxxxxxxxxxxxxxxxxxxx"
+                : "yes xxxxxx | head -c 100000";
+        var r = runner(30, 100).run(dir, cmd);
         assertThat(r.output()).hasSizeLessThan(300).contains("[output truncated]");
     }
 
@@ -1325,6 +1328,7 @@ public class ShellRunner {
             Pattern.compile("mkfs|format\\s+[a-zA-Z]:", Pattern.CASE_INSENSITIVE),
             Pattern.compile("shutdown|reboot|halt", Pattern.CASE_INSENSITIVE),
             Pattern.compile("del\\s+/[fsq].*[a-zA-Z]:\\\\", Pattern.CASE_INSENSITIVE),
+            Pattern.compile("mklink", Pattern.CASE_INSENSITIVE),
             Pattern.compile(":(){ :\\|:& };:")
     );
 
@@ -1433,6 +1437,8 @@ git add src/main/java/com/deerflow/sandbox src/main/java/com/deerflow/tool/BashT
 git commit -m "feat(sandbox): shell runner with timeout, kill, blocklist and output cap"
 ```
 
+> **实现期间修正（commit b026505 + 3eff0fc，以 git log 为准）**：fork bomb 正则转义（原稿在 Java 非法）；stdout 改独立守护线程抽干（原"读到 EOF 再 waitFor"使超时路径不可达）；超时杀树改「瞬时 kill 根 + 2s 预算扫描线程赛跑」（本机 `descendants()` 有 4-8s 慢路径）；输出按平台码页增量解码（Windows 用 `native.encoding`/GBK，修中文乱码）；截断"丢即标"；stdin 立即 EOF；黑名单补 `rm -rf /*` 形态；POSIX 孤儿回收为已知限制（README 声明）；waitForExit 轮询因行为确定性保留。
+
 ---
 
 ### Task 11: ToolExecutionDecorator 正式版（事件 + 错误恢复 + 轮次计数）
@@ -1528,7 +1534,7 @@ import com.deerflow.runtime.RunContext;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.ai.tool.definition.ToolMetadata;
+import org.springframework.ai.tool.metadata.ToolMetadata;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1578,7 +1584,7 @@ public class ToolExecutionDecorator implements ToolCallback {
             return "错误：本次运行工具调用已达上限(" + maxRounds + ")，请停止调用工具并直接给出最终答复。";
         }
         if (ctx.isCancelled()) {
-            return "错误：本次运行已被用户取消，请停止调用工具。";
+            return "错误：用户已取消本次运行，请停止调用工具。";
         }
         String callId = UUID.randomUUID().toString();
         sink.send(new AgentEvent.ToolStart(callId, name, preview(toolInput, 300)));
@@ -1628,8 +1634,12 @@ public class RunContext {
         cancelled.set(true);
         Process p = currentProcess.get();
         if (p != null) {
-            p.descendants().forEach(ProcessHandle::destroyForcibly);
+            // 先瞬时杀直接子进程，再由守护线程做有界后代清扫——
+            // descendants() 在本机可能阻塞 4-8s（T10 实测），不能放在调用线程同步做
             p.destroyForcibly();
+            Thread sweeper = new Thread(() -> p.descendants().forEach(ProcessHandle::destroyForcibly), "run-cancel-sweeper");
+            sweeper.setDaemon(true);
+            sweeper.start();
         }
     }
 
