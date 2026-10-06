@@ -73,8 +73,9 @@ public class ChatController {
     @PostMapping(value = "/sessions/{id}/runs", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter run(
             @PathVariable String id, @RequestBody RunRequest req, HttpServletResponse response) {
+        // 会话必须存在（不存在 → 404，先于任何写入）；模型覆盖持久化紧随其后
+        var session = sessionRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("会话不存在: " + id));
         if (req.model() != null && !req.model().isBlank()) {
-            var session = sessionRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("会话不存在: " + id));
             session.setModel(req.model());
             session.touch();
             sessionRepo.save(session);

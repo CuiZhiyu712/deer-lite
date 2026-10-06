@@ -52,4 +52,11 @@ class ChatControllerTest {
                         .contentType("application/json").content("{\"input\":\"hi\"}"))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void modelsEndpointReturnsList() throws Exception {
+        mvc.perform(get("/api/models"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray());
+    }
 }

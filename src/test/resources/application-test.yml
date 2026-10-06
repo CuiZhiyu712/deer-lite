@@ -10,3 +10,8 @@ spring:
   jpa:
     hibernate:
       ddl-auto: create-drop
+
+# 钉死测试环境的模型表为空：防止宿主机导出 DEEPSEEK_API_KEY 时
+# registry 劫持 ScriptedChatModel、让集成测试直连真网（T20 审查）
+deerflow:
+  models: []

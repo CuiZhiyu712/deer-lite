@@ -38,7 +38,7 @@ deerflow:
   models:
     - name: deepseek-chat
       base-url: https://api.deepseek.com
-      api-key: ${DEEPSEEK_API_KEY:missing-key-tell-user}
+      api-key: ${spring.ai.openai.api-key:${DEEPSEEK_API_KEY:missing-key-tell-user}}
       model: deepseek-chat
 
 server:
