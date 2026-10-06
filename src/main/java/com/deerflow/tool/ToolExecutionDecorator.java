@@ -66,8 +66,9 @@ public class ToolExecutionDecorator implements ToolCallback {
         try {
             String out = delegate.call(toolInput, toolContext);
             long ms = System.currentTimeMillis() - t0;
-            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, out, true, ms));
-            sink.send(new AgentEvent.ToolResult(callId, name, true, preview(out, 500), ms));
+            boolean ok = !ctx.isCancelled();
+            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, out, ok, ms));
+            sink.send(new AgentEvent.ToolResult(callId, name, ok, preview(out, 500), ms));
             return out;
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();

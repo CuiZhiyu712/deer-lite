@@ -48,6 +48,16 @@ public class ScriptedChatModel implements ChatModel {
         rounds.add(Flux.fromIterable(list));
     }
 
+    /** 下一轮返回空流（零 chunk）——用于钉住 blockLast 后的取消复检。 */
+    public void pushEmpty() {
+        rounds.add(reactor.core.publisher.Flux.empty());
+    }
+
+    /** 下一轮直接报错——用于取消后模型失败的优先级测试。 */
+    public void pushError(RuntimeException error) {
+        rounds.add(reactor.core.publisher.Flux.error(error));
+    }
+
     @Override
     public ChatResponse call(Prompt prompt) {
         return stream(prompt).blockLast();

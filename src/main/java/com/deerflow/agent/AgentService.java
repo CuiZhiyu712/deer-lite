@@ -50,6 +50,12 @@ public class AgentService {
 
     private static final class RunCancelledException extends RuntimeException {}
 
+    private static final class RunLimitException extends RuntimeException {
+        RunLimitException(String message) {
+            super(message);
+        }
+    }
+
     private final ChatClient.Builder chatClientBuilder;
     private final ObjectMapper objectMapper;
     private final ChatSessionRepository sessionRepo;
@@ -178,10 +184,10 @@ public class AgentService {
                             throw new RunCancelledException();
                         }
                         if (java.time.Duration.between(run.getStartedAt(), Instant.now()).toSeconds() > maxRunSeconds) {
-                            throw new RuntimeException("运行超时(" + maxRunSeconds + "s)，已终止");
+                            throw new RunLimitException("运行超时(" + maxRunSeconds + "s)，已终止");
                         }
                         if (usage.exceeds(maxRunTokens)) {
-                            throw new RuntimeException("运行 token 超限(" + maxRunTokens + ")，已终止");
+                            throw new RunLimitException("运行 token 超限(" + maxRunTokens + ")，已终止");
                         }
                         ChatResponse cr = resp.chatResponse();
                         if (cr != null && cr.getResult() != null && cr.getResult().getOutput() != null) {
@@ -208,20 +214,27 @@ public class AgentService {
             sink.send(new AgentEvent.RunEnd("done", null));
         } catch (RunCancelledException e) {
             run.setStatus("CANCELLED");
-            if (seqRef >= 0) { // seqRef=-1 表示启动即取消/失败，历史未加载，无合法 seq 可写
-                try {
-                    int seqForPersist = seqRef;
-                    txTemplate.executeWithoutResult(status -> persistRunResult(session.getId(), seqForPersist, ctx, full.toString()));
-                } catch (Exception persistError) {
-                    log.warn("cancelled run {} 持久化部分输出失败", run.getId(), persistError);
-                }
-            }
+            persistPartialQuietly(session.getId(), seqRef, ctx, full.toString());
             sink.send(new AgentEvent.RunEnd("cancelled", null));
-        } catch (Exception e) {
-            log.error("run {} failed", run.getId(), e);
+        } catch (RunLimitException e) {
+            log.warn("run {} 限额终止: {}", run.getId(), e.getMessage());
             run.setStatus("FAILED");
-            run.setError(String.valueOf(e.getMessage()));
-            sink.send(new AgentEvent.RunEnd("failed", String.valueOf(e.getMessage())));
+            run.setError(e.getMessage());
+            persistPartialQuietly(session.getId(), seqRef, ctx, full.toString());
+            sink.send(new AgentEvent.RunEnd("failed", e.getMessage()));
+        } catch (Exception e) {
+            if (ctx.isCancelled()) {
+                // 用户已取消：即使下一轮模型报错，终态也归为 CANCELLED（T16 审查 I3c）
+                log.info("run {} 取消后遇到错误，按 CANCELLED 收口: {}", run.getId(), e.getMessage());
+                run.setStatus("CANCELLED");
+                persistPartialQuietly(session.getId(), seqRef, ctx, full.toString());
+                sink.send(new AgentEvent.RunEnd("cancelled", null));
+            } else {
+                log.error("run {} failed", run.getId(), e);
+                run.setStatus("FAILED");
+                run.setError(String.valueOf(e.getMessage()));
+                sink.send(new AgentEvent.RunEnd("failed", String.valueOf(e.getMessage())));
+            }
         } finally {
             try {
                 if (ping != null) {
@@ -239,6 +252,19 @@ public class AgentService {
             } finally {
                 sink.complete();
             }
+        }
+    }
+
+    /** 取消/限额路径的部分结果持久化：失败仅告警，不掩盖终态（T16 审查）。 */
+    private void persistPartialQuietly(String sessionId, int seqRef, RunContext ctx, String fullText) {
+        if (seqRef < 0) {
+            return;
+        }
+        try {
+            int seqForPersist = seqRef;
+            txTemplate.executeWithoutResult(status -> persistRunResult(sessionId, seqForPersist, ctx, fullText));
+        } catch (Exception persistError) {
+            log.warn("部分结果持久化失败 session={}", sessionId, persistError);
         }
     }
 

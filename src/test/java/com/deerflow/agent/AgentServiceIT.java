@@ -203,4 +203,87 @@ class AgentServiceIT {
         assertThat(rows.get(rows.size() - 1).getRole()).isEqualTo("ASSISTANT");
         emitter.complete(); // 清理真实 emitter（无 handler 的 SseEmitter 直接 complete 安全）
     }
+
+    @Test
+    void zeroChunkAfterCancelStillCancelled() throws Exception {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var blocker = org.springframework.ai.tool.function.FunctionToolCallback
+                .<com.deerflow.tool.ToolInputs.WebSearch, String>builder("blocker", in -> {
+                    entered.countDown();
+                    try { Thread.sleep(600); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    return "blocked";
+                })
+                .description("blocker").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
+        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(blocker));
+        scriptedModel.pushToolCall("t1", "blocker", "{\"query\":\"a\"}");
+        scriptedModel.pushEmpty();
+
+        var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null, Instant.now(), null);
+        var sink = new CollectingSink();
+        var ctx = new RunContext();
+        Thread worker = Thread.ofVirtual().start(() ->
+                agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run, "x", sink, ctx));
+        assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        ctx.requestCancel();
+        worker.join(10_000);
+
+        assertThat(((AgentEvent.RunEnd) sink.events.get(sink.events.size() - 1)).status()).isEqualTo("cancelled");
+        assertThat(runRepo.findById(run.getId()).orElseThrow().getStatus()).isEqualTo("CANCELLED");
+    }
+
+    @Test
+    void limitTerminationPersistsPartialAndFails() {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of());
+        scriptedModel.pushText("部分输出");
+
+        // startedAt 拨旧 700s > max-run-seconds(600)：首个 chunk 即触发限额
+        var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null,
+                Instant.now().minusSeconds(700), null);
+        var sink = new CollectingSink();
+        agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run, "x", sink, new RunContext());
+
+        var last = (AgentEvent.RunEnd) sink.events.get(sink.events.size() - 1);
+        assertThat(last.status()).isEqualTo("failed");
+        var saved = runRepo.findById(run.getId()).orElseThrow();
+        assertThat(saved.getStatus()).isEqualTo("FAILED");
+        assertThat(saved.getError()).contains("超时");
+        var rows = messageRepo.findBySessionIdOrderBySeqAsc(sid);
+        assertThat(rows).extracting(MessageEntity::getRole).containsExactly("USER", "ASSISTANT");
+    }
+
+    @Test
+    void cancelThenModelErrorEndsCancelled() throws Exception {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var blocker = org.springframework.ai.tool.function.FunctionToolCallback
+                .<com.deerflow.tool.ToolInputs.WebSearch, String>builder("blocker", in -> {
+                    entered.countDown();
+                    try { Thread.sleep(400); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    return "blocked";
+                })
+                .description("blocker").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
+        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(blocker));
+        scriptedModel.pushToolCall("t1", "blocker", "{\"query\":\"a\"}");
+        scriptedModel.pushError(new IllegalStateException("model boom"));
+
+        var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null, Instant.now(), null);
+        var sink = new CollectingSink();
+        var ctx = new RunContext();
+        Thread worker = Thread.ofVirtual().start(() ->
+                agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run, "x", sink, ctx));
+        assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        ctx.requestCancel();
+        worker.join(10_000);
+
+        assertThat(((AgentEvent.RunEnd) sink.events.get(sink.events.size() - 1)).status()).isEqualTo("cancelled");
+        assertThat(runRepo.findById(run.getId()).orElseThrow().getStatus()).isEqualTo("CANCELLED");
+    }
 }
