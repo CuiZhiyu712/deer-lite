@@ -47,6 +47,12 @@ class ShellRunnerTest {
         assertThat(r.output()).contains("危险命令");
     }
 
+    @Test
+    void decodesChineseOutput() {
+        var r = runner(10, 10000).run(dir, "echo 你好");
+        assertThat(r.output()).contains("你好");
+    }
+
     /** 跨平台 sleep：Windows(cmd) 与 POSIX(bash) 都支持 */
     private static String sleepCommand(int seconds) {
         return System.getProperty("os.name").toLowerCase().contains("win")

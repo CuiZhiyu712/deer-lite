@@ -3,7 +3,6 @@ package com.deerflow.sandbox;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
@@ -18,7 +17,7 @@ public class ShellRunner {
 
     /** 演示级黑名单：明显破坏性命令直接拒绝（非安全边界，README 已声明）。 */
     private static final List<Pattern> BLOCKLIST = List.of(
-            Pattern.compile("rm\\s+(-[a-zA-Z]*\\s+)*/(\\s|$)"),
+            Pattern.compile("rm\\s+(-{1,2}[a-zA-Z-]*\\s+)*/(\\*|\\s|$)"),
             Pattern.compile("mkfs|format\\s+[a-zA-Z]:", Pattern.CASE_INSENSITIVE),
             Pattern.compile("shutdown|reboot|halt", Pattern.CASE_INSENSITIVE),
             Pattern.compile("del\\s+/[fsq].*[a-zA-Z]:\\\\", Pattern.CASE_INSENSITIVE),
@@ -54,18 +53,25 @@ public class ShellRunner {
                 .redirectErrorStream(true);
         try {
             Process process = pb.start();
+            process.getOutputStream().close(); // 给 stdin EOF，避免 more/pause 类命令白等到超时
             StringBuilder sb = new StringBuilder();
             boolean[] truncated = {false};
+            int[] total = {0}; // 截断预算按字符计（配置键 max-output-bytes 名称沿用，语义为字符上限）
             // 必须在独立线程里持续抽干 stdout：若在主线程读到 EOF 再 waitFor，
-            // 超时逻辑永远不可达（无输出进程会阻塞 read 直到自然结束，实测 ping 阻塞 29s）。
+            // 超时逻辑永远不可达（无输出/读 stdin 的进程会阻塞 read 直到自然结束）。
             Thread pump = new Thread(() -> {
-                try (InputStream in = process.getInputStream()) {
-                    byte[] buf = new byte[8192];
+                try (var reader = new java.io.InputStreamReader(process.getInputStream(), outputCharset())) {
+                    char[] buf = new char[4096];
                     int n;
-                    while ((n = in.read(buf)) != -1) {
+                    while ((n = reader.read(buf)) != -1) {
                         synchronized (truncated) {
-                            if (sb.length() < maxOutputBytes) {
-                                sb.append(new String(buf, 0, Math.min(n, maxOutputBytes - sb.length()), StandardCharsets.UTF_8));
+                            if (total[0] < maxOutputBytes) {
+                                int take = Math.min(n, maxOutputBytes - total[0]);
+                                sb.append(buf, 0, take);
+                                total[0] += take;
+                                if (take < n) {
+                                    truncated[0] = true;
+                                }
                             } else {
                                 truncated[0] = true;
                             }
@@ -80,12 +86,14 @@ public class ShellRunner {
             pump.start();
             boolean finished = waitForExit(process, timeoutSeconds);
             if (!finished) {
+                // Windows：父进程死后孤儿仍保留 PPID，race 扫描可回收（已实测）；
+                // POSIX：孤儿会被重挂，按 PPID 链扫描不可达——已知限制，README 声明
                 process.destroyForcibly();
                 killDescendants(process, 2000);
                 pump.join(300);
                 return new Result(collect(sb, truncated) + "\n[命令超时被强制终止]", -1, true, false);
             }
-            pump.join(5000);
+            pump.join(1000); // 若管道句柄被孙进程继承钉住，至多等 1s 后带部分输出返回
             String output = collect(sb, truncated);
             if (truncated[0]) {
                 output = output + "\n[output truncated]";
@@ -138,9 +146,23 @@ public class ShellRunner {
         return System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
     }
 
+    /** Windows 子进程输出走 OEM/ANSI 码页（本机为 936/GBK），POSIX 为 UTF-8。 */
+    private static java.nio.charset.Charset outputCharset() {
+        if (isWindows()) {
+            String name = System.getProperty("native.encoding");
+            try {
+                return java.nio.charset.Charset.forName(name == null || name.isBlank() ? "GBK" : name);
+            } catch (Exception e) {
+                return java.nio.charset.Charset.forName("GBK");
+            }
+        }
+        return StandardCharsets.UTF_8;
+    }
+
     /**
-     * 轮询 isAlive 而非 waitFor(timeout)：本机实测 JDK 的 waitFor(timeout) 会明显溢出
-     * （1 秒超时实际阻塞约 4.9 秒），导致超时测试的 <4s 断言随环境抖动失败。
+     * 轮询 isAlive（50ms 粒度）而非 waitFor(timeout)：出于确定性边界考虑。
+     * 注：曾怀疑 waitFor 本身溢出（"1s 阻塞 4.9s"），复核表明是本机 ping 被网络策略
+     * 拖慢（~4.5s）造成的混淆，waitFor 实测精确——保留轮询仅为行为确定性，此注释留作记录。
      */
     private static boolean waitForExit(Process process, long seconds) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);

@@ -18,6 +18,9 @@ public class BashTool {
     }
 
     public String bash(String sessionId, String command) {
+        if (command == null || command.isBlank()) {
+            return "错误：command 不能为空";
+        }
         Path cwd = workspace.sessionDir(sessionId);
         ShellRunner.Result r = shell.run(cwd, command);
         return "exit=" + r.exitCode() + (r.timedOut() ? " (超时)" : "") + "\n" + r.output();
