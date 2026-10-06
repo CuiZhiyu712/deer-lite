@@ -12,6 +12,8 @@ public class WorkspaceManager {
 
     private final Path root;
 
+    // 多构造器的 Spring bean 必须显式标注，否则容器无法选择并启动失败（T8 审查实测）
+    @org.springframework.beans.factory.annotation.Autowired
     public WorkspaceManager(org.springframework.core.env.Environment env) {
         this(env.getProperty("deerflow.sandbox.root", "./workspace"));
     }
