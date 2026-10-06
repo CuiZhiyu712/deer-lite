@@ -5,4 +5,6 @@ import java.util.List;
 
 public interface RunRepository extends JpaRepository<Run, String> {
     List<Run> findBySessionIdOrderByStartedAtDesc(String sessionId);
+
+    List<Run> findByStatus(String status);
 }

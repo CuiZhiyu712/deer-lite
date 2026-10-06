@@ -54,4 +54,11 @@ class RepositoryTest {
         assertThat(tool.getContent()).isEqualTo("结果【中文】");
         assertThat(messageRepo.countBySessionId("s2")).isEqualTo(3);
     }
+
+    @Test
+    void findsRunsByStatus() {
+        var run = new Run("r9", "s9", "RUNNING", "x", null, null, null, Instant.now(), null);
+        runRepo.save(run);
+        assertThat(runRepo.findByStatus("RUNNING")).extracting(Run::getId).contains("r9");
+    }
 }
