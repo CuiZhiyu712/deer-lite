@@ -2888,6 +2888,14 @@ git commit -m "feat(agent): AgentService run pipeline with per-run tools, adviso
 
 ---
 
+> **T16 实现期间重要实测（commit 401a80b/18d1ae6 + T16c，供 T17/T21）**：
+> ① `ShellRunner` 三参 run(cwd,cmd,ctx)：取消杀进程后走 finished=true 路径需补发"[运行已取消，进程已终止]"；早取消 blocked=false。
+> ② executeRun：入口取消检查 + doOnNext（取消→超时→token 顺序）+ **blockLast 后取消复检**（零 chunk 防谎报 DONE，测试 `zeroChunkAfterCancelStillCancelled` 用 latch 钉住——删除该 2 行测试即红）。
+> ③ 限额终止与取消一样持久化部分结果（`RunLimitException` → FAILED + partial）；取消后模型报错统一记 CANCELLED。
+> ④ 取消矩阵残余窗口（T17/T21 契约）：在途非 shell 工具不中断（受其自身 HTTP 超时约束）；run_end 前可能出现至多 1 条 usage 与在途 tool_result（前端把 run_end 当唯一终态）；usage 事件是**累计值**（替换而非累加）。
+> ⑤ 被取消的 bash 结果 tool_result 记 ok=false；模型侧 toolCall id 不下传到 ToolCallback（轨迹以装饰器 UUID 为规范 id，结构自洽即可重放）。
+> ⑥ 启动即失败时无 run_start 事件（runId 由 REST 响应体提供——T17）；清理失败发生在 run_end(done) 之后属可接受（前端以 run_end 为终态）。
+
 > **T15 实现期间重要实测（commit 7a26545，供 T16/T21/复跑者）**：
 > ① **`FunctionToolCallback.<I>builder(name, fn)` 单类型参数会静默匹配 `Consumer<I>` 重载**（返回值被丢弃、模型收到 "null"）——必须写 `.<I, O>builder`；计划 7 处已修正。
 > ② stub/自定义 ChatModel 必须让 `getOptions()` 返回 `ToolCallingChatOptions`（真实 OpenAiChatModel 满足；否则 ToolCallingAdvisor 静默不进循环）；嵌套 `@TestConfiguration` 需测试类 `@Import`。
