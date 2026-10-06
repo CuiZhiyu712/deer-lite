@@ -33,6 +33,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -62,6 +63,8 @@ public class AgentService {
     private final int maxToolRounds;
     private final int keepRecentMessages;
     private final int maxEstimatedTokens;
+    private final long maxRunSeconds;
+    private final long maxRunTokens;
 
     private final ExecutorService vtExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final ScheduledExecutorService pingScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -70,6 +73,7 @@ public class AgentService {
         return t;
     });
     private final Map<String, RunContext> activeRuns = new ConcurrentHashMap<>();
+    private final Set<String> activeSessions = ConcurrentHashMap.newKeySet();
 
     public AgentService(ChatClient.Builder chatClientBuilder,
                         ObjectMapper objectMapper,
@@ -82,7 +86,9 @@ public class AgentService {
                         PlatformTransactionManager txManager,
                         @Value("${deerflow.limits.max-tool-rounds:40}") int maxToolRounds,
                         @Value("${deerflow.limits.keep-recent-messages:16}") int keepRecentMessages,
-                        @Value("${deerflow.limits.max-estimated-tokens:60000}") int maxEstimatedTokens) {
+                        @Value("${deerflow.limits.max-estimated-tokens:60000}") int maxEstimatedTokens,
+                        @Value("${deerflow.limits.max-run-seconds:600}") long maxRunSeconds,
+                        @Value("${deerflow.limits.max-run-tokens:200000}") long maxRunTokens) {
         this.chatClientBuilder = chatClientBuilder;
         this.objectMapper = objectMapper;
         this.sessionRepo = sessionRepo;
@@ -95,17 +101,29 @@ public class AgentService {
         this.maxToolRounds = maxToolRounds;
         this.keepRecentMessages = keepRecentMessages;
         this.maxEstimatedTokens = maxEstimatedTokens;
+        this.maxRunSeconds = maxRunSeconds;
+        this.maxRunTokens = maxRunTokens;
     }
 
     public SseEmitter startRun(String sessionId, String input) {
         ChatSession session = sessionRepo.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + sessionId));
+        if (!activeSessions.add(sessionId)) {
+            throw new IllegalStateException("该会话已有运行中的任务: " + sessionId);
+        }
         SseEmitter emitter = new SseEmitter(0L);
         EventSink sink = new EventSink(emitter, objectMapper);
         Run run = new Run(UUID.randomUUID().toString(), sessionId, "RUNNING", input, null, null, null, Instant.now(), null);
         RunContext ctx = new RunContext();
         activeRuns.put(run.getId(), ctx);
-        vtExecutor.submit(() -> executeRun(session, run, input, sink, ctx));
+        try {
+            vtExecutor.submit(() -> executeRun(session, run, input, sink, ctx));
+        } catch (RuntimeException e) {
+            activeSessions.remove(sessionId);
+            activeRuns.remove(run.getId());
+            sink.fail(e);
+            throw e;
+        }
         return emitter;
     }
 
@@ -118,15 +136,22 @@ public class AgentService {
 
     /** 包级可见：集成测试直接调用（绕过 SSE 传输层）。 */
     void executeRun(ChatSession session, Run run, String input, EventSink sink, RunContext ctx) {
-        runRepo.save(run);
-        sink.send(new AgentEvent.RunStart(run.getId(), session.getId()));
-        ScheduledFuture<?> ping = pingScheduler.scheduleAtFixedRate(
-                () -> sink.send(new AgentEvent.Ping()), 15, 15, TimeUnit.SECONDS);
+        ScheduledFuture<?> ping = null;
         RunUsage usage = new RunUsage();
+        StringBuilder full = new StringBuilder();
+        int seqRef = -1;
         try {
+            runRepo.save(run);
+            sink.send(new AgentEvent.RunStart(run.getId(), session.getId()));
+            ping = pingScheduler.scheduleAtFixedRate(
+                    () -> sink.send(new AgentEvent.Ping()), 15, 15, TimeUnit.SECONDS);
+            if (ctx.isCancelled()) { // 取消早于启动（T15 审查 P2）
+                throw new RunCancelledException();
+            }
+
             List<MessageEntity> history = messageRepo.findBySessionIdOrderBySeqAsc(session.getId());
-            int seq = history.size();
-            messageRepo.save(new MessageEntity(UUID.randomUUID().toString(), session.getId(), seq++,
+            seqRef = history.size();
+            messageRepo.save(new MessageEntity(UUID.randomUUID().toString(), session.getId(), seqRef++,
                     "USER", input, null, null, null, Instant.now()));
 
             Path workspace = workspaceManager.sessionDir(session.getId());
@@ -146,12 +171,17 @@ public class AgentService {
             List<Message> promptMessages = new ArrayList<>(messageConverter.toDomain(history));
             promptMessages.add(new UserMessage(input));
 
-            StringBuilder full = new StringBuilder();
             client.prompt().messages(promptMessages).toolCallbacks(tools)
                     .stream().chatClientResponse()
                     .doOnNext(resp -> {
                         if (ctx.isCancelled()) {
                             throw new RunCancelledException();
+                        }
+                        if (java.time.Duration.between(run.getStartedAt(), Instant.now()).toSeconds() > maxRunSeconds) {
+                            throw new RuntimeException("运行超时(" + maxRunSeconds + "s)，已终止");
+                        }
+                        if (usage.exceeds(maxRunTokens)) {
+                            throw new RuntimeException("运行 token 超限(" + maxRunTokens + ")，已终止");
                         }
                         ChatResponse cr = resp.chatResponse();
                         if (cr != null && cr.getResult() != null && cr.getResult().getOutput() != null) {
@@ -164,14 +194,28 @@ public class AgentService {
                     })
                     .blockLast();
 
-            int resultSeq = seq; // lambda 捕获需要 effectively final（seq 上面已自增过）
-            txTemplate.executeWithoutResult(status -> persistRunResult(session.getId(), resultSeq, ctx, full.toString()));
+            if (ctx.isCancelled()) { // 取消落在工具阻塞期但最终轮零 chunk：不得谎报 DONE（T15 审查 P7，2 行修复）
+                throw new RunCancelledException();
+            }
+
+            if (seqRef >= 0) {
+                int seqForPersist = seqRef;
+                txTemplate.executeWithoutResult(status -> persistRunResult(session.getId(), seqForPersist, ctx, full.toString()));
+            }
             run.setStatus("DONE");
             run.setInputTokens(usage.inputTokens());
             run.setOutputTokens(usage.outputTokens());
             sink.send(new AgentEvent.RunEnd("done", null));
         } catch (RunCancelledException e) {
             run.setStatus("CANCELLED");
+            if (seqRef >= 0) { // seqRef=-1 表示启动即取消/失败，历史未加载，无合法 seq 可写
+                try {
+                    int seqForPersist = seqRef;
+                    txTemplate.executeWithoutResult(status -> persistRunResult(session.getId(), seqForPersist, ctx, full.toString()));
+                } catch (Exception persistError) {
+                    log.warn("cancelled run {} 持久化部分输出失败", run.getId(), persistError);
+                }
+            }
             sink.send(new AgentEvent.RunEnd("cancelled", null));
         } catch (Exception e) {
             log.error("run {} failed", run.getId(), e);
@@ -179,13 +223,22 @@ public class AgentService {
             run.setError(String.valueOf(e.getMessage()));
             sink.send(new AgentEvent.RunEnd("failed", String.valueOf(e.getMessage())));
         } finally {
-            ping.cancel(false);
-            activeRuns.remove(run.getId());
-            run.setEndedAt(Instant.now());
-            runRepo.save(run);
-            session.touch();
-            sessionRepo.save(session);
-            sink.complete();
+            try {
+                if (ping != null) {
+                    ping.cancel(false);
+                }
+                activeRuns.remove(run.getId());
+                activeSessions.remove(session.getId());
+                run.setEndedAt(Instant.now());
+                runRepo.save(run);
+                session.touch();
+                sessionRepo.save(session);
+            } catch (Exception cleanupError) {
+                log.error("run {} 收尾失败", run.getId(), cleanupError);
+                sink.fail(cleanupError);
+            } finally {
+                sink.complete();
+            }
         }
     }
 

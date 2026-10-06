@@ -39,18 +39,21 @@ class AgentServiceIT {
     @Autowired ChatSessionRepository sessionRepo;
     @Autowired MessageRepository messageRepo;
     @Autowired RunRepository runRepo;
+    @Autowired MessageConverter messageConverter;
     @Autowired ScriptedChatModel scriptedModel;
 
     static class CollectingSink extends EventSink {
         final List<AgentEvent> events = new CopyOnWriteArrayList<>();
+        volatile boolean closed;
         CollectingSink() { super(null, null); }
         @Override public void send(AgentEvent e) { events.add(e); }
-        @Override public void complete() { }
-        @Override public void fail(Throwable t) { }
+        @Override public synchronized void complete() { closed = true; }
+        @Override public void fail(Throwable t) { closed = true; }
     }
 
     @Test
     void runWithToolRoundEmitsEventsAndPersists() {
+        scriptedModel.reset();
         String sid = UUID.randomUUID().toString();
         sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
 
@@ -82,5 +85,122 @@ class AgentServiceIT {
         assertThat(rows).extracting(MessageEntity::getRole)
                 .containsExactly("USER", "ASSISTANT", "TOOL", "ASSISTANT");
         assertThat(runRepo.findById(run.getId()).orElseThrow().getStatus()).isEqualTo("DONE");
+        assertThat(sink.closed).isTrue();
+    }
+
+    @Test
+    void failurePathPersistsFailedRun() {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of());
+        var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null, Instant.now(), null);
+        var sink = new CollectingSink();
+        agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run, "x", sink, new RunContext());
+
+        assertThat(sink.events.get(sink.events.size() - 1)).isInstanceOf(AgentEvent.RunEnd.class);
+        assertThat(((AgentEvent.RunEnd) sink.events.get(sink.events.size() - 1)).status()).isEqualTo("failed");
+        var saved = runRepo.findById(run.getId()).orElseThrow();
+        assertThat(saved.getStatus()).isEqualTo("FAILED");
+        assertThat(saved.getError()).isNotBlank();
+        assertThat(saved.getEndedAt()).isNotNull();
+        assertThat(sink.closed).isTrue();
+    }
+
+    @Test
+    void multiRoundTwoToolsMergeIntoOneAssistantRow() {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        scriptedModel.pushToolCall("t1", "echo", "{\"query\":\"a\"}");
+        scriptedModel.pushToolCall("t2", "echo", "{\"query\":\"b\"}");
+        scriptedModel.pushText("ok");
+        var echo = org.springframework.ai.tool.function.FunctionToolCallback
+                .<com.deerflow.tool.ToolInputs.WebSearch, String>builder("echo", in -> "echo:" + in.query())
+                .description("echo").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
+        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(echo));
+
+        var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null, Instant.now(), null);
+        var sink = new CollectingSink();
+        agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run, "x", sink, new RunContext());
+
+        var rows = messageRepo.findBySessionIdOrderBySeqAsc(sid);
+        assertThat(rows).extracting(MessageEntity::getRole)
+                .containsExactly("USER", "ASSISTANT", "TOOL", "TOOL", "ASSISTANT");
+        assertThat(rows).extracting(MessageEntity::getSeq).containsExactly(0, 1, 2, 3, 4);
+        // 两个模型轮次的工具调用必须合并进同一 ASSISTANT 行，且参数逐条保留。
+        // 注意：持久化的 callId 是 ToolExecutionDecorator 生成的关联 ID——2.0.1 的
+        // DefaultToolCallingManager 对单个响应只构建一个共享 ToolContext（javap 实测），
+        // 模型侧 id（t1/t2）不会下传到 ToolCallback，故此处按 name/arguments 断言内容。
+        var calls = messageConverter.parseToolCalls(rows.get(1).getToolCallsJson());
+        assertThat(calls).extracting(MessageConverter.ToolCallRecord::name).containsExactly("echo", "echo");
+        assertThat(calls).extracting(MessageConverter.ToolCallRecord::arguments)
+                .containsExactly("{\"query\":\"a\"}", "{\"query\":\"b\"}");
+        // TOOL 行的 toolCallId 必须与 ASSISTANT 行的 toolCalls id 一一对应（重放合法性）
+        assertThat(rows).extracting(MessageEntity::getToolCallId)
+                .containsExactly(null, null, calls.get(0).id(), calls.get(1).id(), null);
+    }
+
+    @Test
+    void historyReplayContinuesSeq() {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of());
+
+        scriptedModel.pushText("一");
+        var run1 = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "q1", null, null, null, Instant.now(), null);
+        agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run1, "q1", new CollectingSink(), new RunContext());
+
+        scriptedModel.pushText("二");
+        var run2 = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "q2", null, null, null, Instant.now(), null);
+        agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run2, "q2", new CollectingSink(), new RunContext());
+
+        var rows = messageRepo.findBySessionIdOrderBySeqAsc(sid);
+        assertThat(rows).extracting(MessageEntity::getRole)
+                .containsExactly("USER", "ASSISTANT", "USER", "ASSISTANT");
+        assertThat(rows).extracting(MessageEntity::getSeq).containsExactly(0, 1, 2, 3);
+    }
+
+    @Test
+    void cancelViaStartRunEndsCancelledWithPartialPersisted() throws Exception {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        scriptedModel.pushToolCall("t1", "slow", "{\"query\":\"a\"}");
+        scriptedModel.pushText("完成");
+        var slow = org.springframework.ai.tool.function.FunctionToolCallback
+                .<com.deerflow.tool.ToolInputs.WebSearch, String>builder("slow", in -> {
+                    try { Thread.sleep(800); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    return "slow:" + in.query();
+                })
+                .description("slow").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
+        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(slow));
+
+        var emitter = agentService.startRun(sid, "开始");
+        // 从 DB 拿到 runId（RUNNING 行）
+        String runId = null;
+        for (int i = 0; i < 40 && runId == null; i++) {
+            runId = runRepo.findAll().stream()
+                    .filter(r -> sid.equals(r.getSessionId()) && "RUNNING".equals(r.getStatus()))
+                    .map(Run::getId).findFirst().orElse(null);
+            if (runId == null) Thread.sleep(50);
+        }
+        assertThat(runId).isNotNull();
+        Thread.sleep(150); // 等工具真正开始执行
+        agentService.cancel(runId);
+
+        String status = null;
+        for (int i = 0; i < 100 && !"CANCELLED".equals(status); i++) {
+            status = runRepo.findById(runId).orElseThrow().getStatus();
+            if (!"CANCELLED".equals(status)) Thread.sleep(50);
+        }
+        assertThat(status).isEqualTo("CANCELLED");
+        var rows = messageRepo.findBySessionIdOrderBySeqAsc(sid);
+        assertThat(rows).isNotEmpty();
+        assertThat(rows.get(0).getRole()).isEqualTo("USER");
+        // ④ 取消也持久化部分结果：CANCELLED 状态在 finally 才落库，晚于 persistRunResult，因此此刻末行必为部分 ASSISTANT
+        assertThat(rows.get(rows.size() - 1).getRole()).isEqualTo("ASSISTANT");
+        emitter.complete(); // 清理真实 emitter（无 handler 的 SseEmitter 直接 complete 安全）
     }
 }

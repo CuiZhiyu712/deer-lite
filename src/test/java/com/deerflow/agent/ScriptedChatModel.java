@@ -23,6 +23,10 @@ public class ScriptedChatModel implements ChatModel {
 
     private final Queue<Flux<ChatResponse>> rounds = new ConcurrentLinkedQueue<>();
 
+    public void reset() {
+        rounds.clear();
+    }
+
     /** 工具轮：单个 chunk 即携带完整 toolCalls（2.0.1 聚合器单 chunk 直通，实测见 T15 报告）。 */
     public void pushToolCall(String id, String name, String argsJson) {
         var message = AssistantMessage.builder()
