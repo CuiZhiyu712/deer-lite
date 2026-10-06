@@ -2473,37 +2473,37 @@ public class AgentToolsFactory {
 
     public List<ToolCallback> forRun(String sessionId, RunContext ctx) {
         return List.of(
-                FunctionToolCallback.<ToolInputs.ReadFile>builder("read_file",
+                FunctionToolCallback.<ToolInputs.ReadFile, String>builder("read_file",
                                 in -> fileTools.readFile(sessionId, in.path()))
                         .description("读取会话工作区中的文本文件，path 为相对工作区路径")
                         .inputType(ToolInputs.ReadFile.class).build(),
 
-                FunctionToolCallback.<ToolInputs.WriteFile>builder("write_file",
+                FunctionToolCallback.<ToolInputs.WriteFile, String>builder("write_file",
                                 in -> fileTools.writeFile(sessionId, in.path(), in.content()))
                         .description("在会话工作区写入/覆盖文本文件")
                         .inputType(ToolInputs.WriteFile.class).build(),
 
-                FunctionToolCallback.<ToolInputs.StrReplace>builder("str_replace",
+                FunctionToolCallback.<ToolInputs.StrReplace, String>builder("str_replace",
                                 in -> fileTools.strReplace(sessionId, in.path(), in.oldText(), in.newText()))
                         .description("把工作区文件中第一处 oldText 替换为 newText")
                         .inputType(ToolInputs.StrReplace.class).build(),
 
-                FunctionToolCallback.<ToolInputs.Ls>builder("ls",
+                FunctionToolCallback.<ToolInputs.Ls, String>builder("ls",
                                 in -> fileTools.ls(sessionId, in.path() == null ? "." : in.path()))
                         .description("列出工作区目录内容")
                         .inputType(ToolInputs.Ls.class).build(),
 
-                FunctionToolCallback.<ToolInputs.Bash>builder("bash",
+                FunctionToolCallback.<ToolInputs.Bash, String>builder("bash",
                                 in -> bashTool.bash(sessionId, in.command()))
                         .description("在工作区中执行一条 shell 命令（30 秒超时）。Windows 为 cmd.exe，其他平台为 bash")
                         .inputType(ToolInputs.Bash.class).build(),
 
-                FunctionToolCallback.<ToolInputs.WebSearch>builder("web_search",
+                FunctionToolCallback.<ToolInputs.WebSearch, String>builder("web_search",
                                 in -> webSearchTool.webSearch(in.query(), in.maxResults() == null ? 5 : in.maxResults()))
                         .description("联网搜索，返回标题/链接/摘要列表")
                         .inputType(ToolInputs.WebSearch.class).build(),
 
-                FunctionToolCallback.<ToolInputs.WebFetch>builder("web_fetch",
+                FunctionToolCallback.<ToolInputs.WebFetch, String>builder("web_fetch",
                                 in -> webFetchTool.webFetch(in.url()))
                         .description("抓取网页并转为 Markdown 文本")
                         .inputType(ToolInputs.WebFetch.class).build()
@@ -2569,7 +2569,7 @@ class AgentServiceIT {
         scriptedModel.pushText("结果是 ", "echo:hi");
 
         var echo = org.springframework.ai.tool.function.FunctionToolCallback
-                .<com.deerflow.tool.ToolInputs.WebSearch>builder("echo", in -> "echo:" + in.query())
+                .<com.deerflow.tool.ToolInputs.WebSearch, String>builder("echo", in -> "echo:" + in.query())
                 .description("echo").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
         when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(echo));
 
@@ -2887,6 +2887,15 @@ git commit -m "feat(agent): AgentService run pipeline with per-run tools, adviso
 ```
 
 ---
+
+> **T15 实现期间重要实测（commit 7a26545，供 T16/T21/复跑者）**：
+> ① **`FunctionToolCallback.<I>builder(name, fn)` 单类型参数会静默匹配 `Consumer<I>` 重载**（返回值被丢弃、模型收到 "null"）——必须写 `.<I, O>builder`；计划 7 处已修正。
+> ② stub/自定义 ChatModel 必须让 `getOptions()` 返回 `ToolCallingChatOptions`（真实 OpenAiChatModel 满足；否则 ToolCallingAdvisor 静默不进循环）；嵌套 `@TestConfiguration` 需测试类 `@Import`。
+> ③ 单 chunk 携带 toolCalls 即可触发工具轮；finishReason 不参与判定；工具轮 chunk 不进下游流。
+> ④ UsageTracking（最外层）对**每个流经 chunk** 发一次 usage 事件（stub 下为 0/0 EmptyUsage）——T21 前端需容忍逐 chunk usage。
+> ⑤ `seq` 自增后非 effectively final，进 txTemplate lambda 前需拷贝（`int resultSeq = seq;`）。
+> ⑥ 事件序断言用 `containsSubsequence` + 首尾钉住（usage/text_delta 会夹杂其间）。
+> ⑦ pom 的 surefire 需 include `**/*IT.java`（默认 pattern 不匹配 `*IT`，AgentServiceIT 会被静默跳过——T15 审查实测；已在 B 阶段补上）。
 
 ### Task 16: 取消、限额与进程强杀
 
