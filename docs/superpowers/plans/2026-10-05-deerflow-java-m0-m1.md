@@ -1838,6 +1838,8 @@ git commit -m "feat(tool): web search (Tavily) and web fetch (Jina) tools"
 
 ---
 
+> **T12 实现期间修正（commit 3abd17b + 后续 fix）**：`WebFetchTool` 用 `URI.create` 绕过模板编码并**强制要求 http(s) 前缀**（防 `"/"+url` 的 authority 劫持 SSRF）；`WebSearchTool` 空 key 短路 + null 响应防御 + 输出截断；`application.yml` 必须配置 `spring.http.clients.connect-timeout/read-timeout`——**无超时的 HTTP 调用会让 run 永久挂起，取消与限额全部失效（T12 审查实测证据链）**。
+
 ### Task 13: 系统提示词、PromptBuilder 与三个 Advisor
 
 **Files:**
