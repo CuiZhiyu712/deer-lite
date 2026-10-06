@@ -46,4 +46,39 @@ class MessageConverterTest {
         assertThat(trm.getResponses().get(0).id()).isEqualTo("c1");
         assertThat(trm.getResponses().get(0).responseData()).isEqualTo("12:00");
     }
+
+    @Test
+    void downgradesHalfWrittenToolPairing() {
+        var conv = converter();
+        var rows = List.of(
+                new MessageEntity("m1", "s1", 0, "USER", "问题", null, null, null, Instant.now()),
+                new MessageEntity("m2", "s1", 1, "ASSISTANT", "", conv.serialiseToolCalls(List.of(
+                        new MessageConverter.ToolCallRecord("c1", "function", "bash", "{}"),
+                        new MessageConverter.ToolCallRecord("c2", "function", "bash", "{}"))), null, null, Instant.now()),
+                new MessageEntity("m3", "s1", 2, "TOOL", "ok", null, "c1", "bash", Instant.now())
+        );
+        var messages = conv.toDomain(rows);
+        assertThat(messages).hasSize(2);
+        assertThat(messages.get(1)).isInstanceOf(AssistantMessage.class);
+        assertThat(((AssistantMessage) messages.get(1)).getToolCalls()).isEmpty();
+    }
+
+    @Test
+    void dropsOrphanToolResponse() {
+        var conv = converter();
+        var rows = List.of(
+                new MessageEntity("m1", "s1", 0, "USER", "问题", null, null, null, Instant.now()),
+                new MessageEntity("m2", "s1", 1, "TOOL", "孤儿", null, "ghost", "bash", Instant.now())
+        );
+        var messages = conv.toDomain(rows);
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0)).isInstanceOf(UserMessage.class);
+    }
+
+    @Test
+    void normalisesNullUserContent() {
+        var conv = converter();
+        var rows = List.of(new MessageEntity("m1", "s1", 0, "USER", null, null, null, null, Instant.now()));
+        assertThat(((UserMessage) conv.toDomain(rows).get(0)).getText()).isEmpty();
+    }
 }
