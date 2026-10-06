@@ -246,8 +246,13 @@ public class AgentService {
                 activeSessions.remove(session.getId());
                 run.setEndedAt(Instant.now());
                 runRepo.save(run);
-                session.touch();
-                sessionRepo.save(session);
+                // 重载会话后再 touch/save——避免 detached 实体的 merge 把运行期间
+                // 工具写入的字段（如 todosJson）覆盖回旧值（T18 审查 F1 实测）
+                var freshSession = sessionRepo.findById(session.getId()).orElse(null);
+                if (freshSession != null) {
+                    freshSession.touch();
+                    sessionRepo.save(freshSession);
+                }
             } catch (Exception cleanupError) {
                 log.error("run {} 收尾失败", run.getId(), cleanupError);
                 sink.fail(cleanupError);

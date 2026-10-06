@@ -33,7 +33,7 @@ public class TodoTool {
             return "错误：最多一个任务处于 in_progress";
         }
         for (TodoItem t : todos) {
-            if (!VALID.contains(t.status())) {
+            if (t.status() == null || !VALID.contains(t.status())) {
                 return "错误：status 只能是 pending / in_progress / completed";
             }
         }

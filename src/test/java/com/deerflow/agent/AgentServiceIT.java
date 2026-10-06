@@ -284,4 +284,33 @@ class AgentServiceIT {
         assertThat(((AgentEvent.RunEnd) sink.events.get(sink.events.size() - 1)).status()).isEqualTo("cancelled");
         assertThat(runRepo.findById(run.getId()).orElseThrow().getStatus()).isEqualTo("CANCELLED");
     }
+
+    @Autowired
+    com.deerflow.tool.TodoTool todoTool;
+
+    @Test
+    void todosWrittenDuringRunSurviveRunEnd() {
+        scriptedModel.reset();
+        String sid = UUID.randomUUID().toString();
+        sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
+        scriptedModel.pushToolCall("t1", "write_todos", "{\"todos\":[{\"content\":\"步骤1\",\"status\":\"in_progress\"}]}");
+        scriptedModel.pushText("done");
+        var sink = new CollectingSink();
+        var todosCallback = org.springframework.ai.tool.function.FunctionToolCallback
+                .<com.deerflow.tool.ToolInputs.WriteTodos, String>builder("write_todos",
+                        in -> todoTool.writeTodos(sid,
+                                in.todos().stream()
+                                        .map(t -> new com.deerflow.tool.TodoTool.TodoItem(t.content(), t.status()))
+                                        .toList(),
+                                sink))
+                .description("todos")
+                .inputType(com.deerflow.tool.ToolInputs.WriteTodos.class).build();
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of(todosCallback));
+
+        var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null, Instant.now(), null);
+        agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run, "x", sink, new RunContext());
+
+        // run 结束后的收尾 save 不得覆盖运行期间工具写入的 todosJson（F1 回归）
+        assertThat(sessionRepo.findById(sid).orElseThrow().getTodosJson()).contains("步骤1");
+    }
 }
