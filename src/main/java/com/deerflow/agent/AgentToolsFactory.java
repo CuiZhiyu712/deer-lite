@@ -52,7 +52,7 @@ public class AgentToolsFactory {
                         .inputType(ToolInputs.Ls.class).build(),
 
                 FunctionToolCallback.<ToolInputs.Bash, String>builder("bash",
-                                in -> bashTool.bash(sessionId, in.command()))
+                                in -> bashTool.bash(sessionId, in.command(), ctx))
                         .description("在工作区中执行一条 shell 命令（30 秒超时）。Windows 为 cmd.exe，其他平台为 bash")
                         .inputType(ToolInputs.Bash.class).build(),
 

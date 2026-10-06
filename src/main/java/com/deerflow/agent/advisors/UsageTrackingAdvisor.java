@@ -41,6 +41,9 @@ public class UsageTrackingAdvisor implements StreamAdvisor {
             Number out = resp.chatResponse().getMetadata().getUsage().getCompletionTokens();
             Long inL = in == null ? null : in.longValue();
             Long outL = out == null ? null : out.longValue();
+            if ((inL == null || inL == 0L) && (outL == null || outL == 0L)) {
+                return; // EmptyUsage：抑制 0/0，避免每 chunk 一事件与尾 chunk 覆写总额（T15 审查）
+            }
             usage.set(inL, outL);
             sink.send(new AgentEvent.Usage(inL, outL));
         });

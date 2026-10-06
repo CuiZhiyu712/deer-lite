@@ -43,6 +43,14 @@ public class ShellRunner {
     }
 
     public Result run(Path cwd, String command) {
+        return run(cwd, command, null);
+    }
+
+    public Result run(Path cwd, String command, com.deerflow.runtime.RunContext ctx) {
+        if (ctx != null && ctx.isCancelled()) {
+            // blocked 语义保留给黑名单拦截；取消走独立分支（ShellRunnerCancelTest 断言 blocked=false）
+            return new Result("错误：运行已取消", -1, false, false);
+        }
         for (Pattern p : BLOCKLIST) {
             if (p.matcher(command).find()) {
                 return new Result("错误：危险命令被拦截: " + command, -1, false, true);
@@ -53,52 +61,67 @@ public class ShellRunner {
                 .redirectErrorStream(true);
         try {
             Process process = pb.start();
-            process.getOutputStream().close(); // 给 stdin EOF，避免 more/pause 类命令白等到超时
-            StringBuilder sb = new StringBuilder();
-            boolean[] truncated = {false};
-            int[] total = {0}; // 截断预算按字符计（配置键 max-output-bytes 名称沿用，语义为字符上限）
-            // 必须在独立线程里持续抽干 stdout：若在主线程读到 EOF 再 waitFor，
-            // 超时逻辑永远不可达（无输出/读 stdin 的进程会阻塞 read 直到自然结束）。
-            Thread pump = new Thread(() -> {
-                try (var reader = new java.io.InputStreamReader(process.getInputStream(), outputCharset())) {
-                    char[] buf = new char[4096];
-                    int n;
-                    while ((n = reader.read(buf)) != -1) {
-                        synchronized (truncated) {
-                            if (total[0] < maxOutputBytes) {
-                                int take = Math.min(n, maxOutputBytes - total[0]);
-                                sb.append(buf, 0, take);
-                                total[0] += take;
-                                if (take < n) {
+            if (ctx != null) {
+                ctx.bindProcess(process);
+            }
+            try {
+                process.getOutputStream().close(); // 给 stdin EOF，避免 more/pause 类命令白等到超时
+                StringBuilder sb = new StringBuilder();
+                boolean[] truncated = {false};
+                int[] total = {0}; // 截断预算按字符计（配置键 max-output-bytes 名称沿用，语义为字符上限）
+                // 必须在独立线程里持续抽干 stdout：若在主线程读到 EOF 再 waitFor，
+                // 超时逻辑永远不可达（无输出/读 stdin 的进程会阻塞 read 直到自然结束）。
+                Thread pump = new Thread(() -> {
+                    try (var reader = new java.io.InputStreamReader(process.getInputStream(), outputCharset())) {
+                        char[] buf = new char[4096];
+                        int n;
+                        while ((n = reader.read(buf)) != -1) {
+                            synchronized (truncated) {
+                                if (total[0] < maxOutputBytes) {
+                                    int take = Math.min(n, maxOutputBytes - total[0]);
+                                    sb.append(buf, 0, take);
+                                    total[0] += take;
+                                    if (take < n) {
+                                        truncated[0] = true;
+                                    }
+                                } else {
                                     truncated[0] = true;
                                 }
-                            } else {
-                                truncated[0] = true;
                             }
                         }
+                    } catch (IOException e) {
+                        // 进程被强杀导致管道关闭属正常路径（尤其 Windows 上子进程句柄滞后释放）
                     }
-                } catch (IOException e) {
-                    // 进程被强杀导致管道关闭属正常路径（尤其 Windows 上子进程句柄滞后释放）
+                });
+                pump.setName("shell-output-pump");
+                pump.setDaemon(true);
+                pump.start();
+                boolean finished = waitForExit(process, timeoutSeconds);
+                if (!finished) {
+                    // Windows：父进程死后孤儿仍保留 PPID，race 扫描可回收（已实测）；
+                    // POSIX：孤儿会被重挂，按 PPID 链扫描不可达——已知限制，README 声明
+                    process.destroyForcibly();
+                    killDescendants(process, 2000);
+                    pump.join(300);
+                    boolean cancelled = ctx != null && ctx.isCancelled();
+                    String reason = cancelled ? "[运行已取消，进程已终止]" : "[命令超时被强制终止]";
+                    return new Result(collect(sb, truncated) + "\n" + reason, -1, !cancelled, false);
                 }
-            });
-            pump.setName("shell-output-pump");
-            pump.setDaemon(true);
-            pump.start();
-            boolean finished = waitForExit(process, timeoutSeconds);
-            if (!finished) {
-                // Windows：父进程死后孤儿仍保留 PPID，race 扫描可回收（已实测）；
-                // POSIX：孤儿会被重挂，按 PPID 链扫描不可达——已知限制，README 声明
-                process.destroyForcibly();
-                killDescendants(process, 2000);
-                pump.join(300);
-                return new Result(collect(sb, truncated) + "\n[命令超时被强制终止]", -1, true, false);
+                pump.join(1000); // 若管道句柄被孙进程继承钉住，至多等 1s 后带部分输出返回
+                String output = collect(sb, truncated);
+                if (truncated[0]) {
+                    output = output + "\n[output truncated]";
+                }
+                if (ctx != null && ctx.isCancelled()) {
+                    // requestCancel 会直接强杀进程 → waitForExit 走 finished=true 路径，须在此补发取消语义（T15 审查）
+                    return new Result(output + "\n[运行已取消，进程已终止]", -1, false, false);
+                }
+                return new Result(output, process.exitValue(), false, false);
+            } finally {
+                if (ctx != null) {
+                    ctx.clearProcess(process);
+                }
             }
-            pump.join(1000); // 若管道句柄被孙进程继承钉住，至多等 1s 后带部分输出返回
-            String output = collect(sb, truncated);
-            if (truncated[0]) {
-                output = output + "\n[output truncated]";
-            }
-            return new Result(output, process.exitValue(), false, false);
         } catch (IOException e) {
             return new Result("错误：命令启动失败: " + e.getMessage(), -1, false, false);
         } catch (InterruptedException e) {
