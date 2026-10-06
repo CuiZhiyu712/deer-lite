@@ -164,7 +164,7 @@ public class AgentService {
 
             Path workspace = workspaceManager.sessionDir(session.getId());
             var counter = new AtomicInteger();
-            List<ToolCallback> tools = toolsFactory.forRun(session.getId(), ctx).stream()
+            List<ToolCallback> tools = toolsFactory.forRun(session.getId(), ctx, sink).stream()
                     .map(cb -> (ToolCallback) new ToolExecutionDecorator(cb, sink, counter, maxToolRounds, ctx))
                     .toList();
 

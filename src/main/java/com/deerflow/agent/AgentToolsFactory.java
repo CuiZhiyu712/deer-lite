@@ -1,8 +1,10 @@
 package com.deerflow.agent;
 
+import com.deerflow.event.EventSink;
 import com.deerflow.runtime.RunContext;
 import com.deerflow.tool.BashTool;
 import com.deerflow.tool.FileTools;
+import com.deerflow.tool.TodoTool;
 import com.deerflow.tool.ToolInputs;
 import com.deerflow.tool.WebFetchTool;
 import com.deerflow.tool.WebSearchTool;
@@ -20,16 +22,19 @@ public class AgentToolsFactory {
     private final BashTool bashTool;
     private final WebSearchTool webSearchTool;
     private final WebFetchTool webFetchTool;
+    private final TodoTool todoTool;
 
     public AgentToolsFactory(FileTools fileTools, BashTool bashTool,
-                             WebSearchTool webSearchTool, WebFetchTool webFetchTool) {
+                             WebSearchTool webSearchTool, WebFetchTool webFetchTool,
+                             TodoTool todoTool) {
         this.fileTools = fileTools;
         this.bashTool = bashTool;
         this.webSearchTool = webSearchTool;
         this.webFetchTool = webFetchTool;
+        this.todoTool = todoTool;
     }
 
-    public List<ToolCallback> forRun(String sessionId, RunContext ctx) {
+    public List<ToolCallback> forRun(String sessionId, RunContext ctx, EventSink sink) {
         return List.of(
                 FunctionToolCallback.<ToolInputs.ReadFile, String>builder("read_file",
                                 in -> fileTools.readFile(sessionId, in.path()))
@@ -64,7 +69,14 @@ public class AgentToolsFactory {
                 FunctionToolCallback.<ToolInputs.WebFetch, String>builder("web_fetch",
                                 in -> webFetchTool.webFetch(in.url()))
                         .description("抓取网页并转为 Markdown 文本")
-                        .inputType(ToolInputs.WebFetch.class).build()
+                        .inputType(ToolInputs.WebFetch.class).build(),
+
+                FunctionToolCallback.<ToolInputs.WriteTodos, String>builder("write_todos",
+                                in -> todoTool.writeTodos(sessionId,
+                                        in.todos().stream().map(t -> new TodoTool.TodoItem(t.content(), t.status())).toList(),
+                                        sink))
+                        .description("创建/更新本次任务的任务清单（多步骤任务必须先建立清单并实时更新；最多一个 in_progress）")
+                        .inputType(ToolInputs.WriteTodos.class).build()
         );
     }
 }

@@ -45,4 +45,11 @@ class ChatControllerTest {
         mvc.perform(get("/api/sessions/no-such-id"))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void runsOnUnknownSessionReturns404() throws Exception {
+        mvc.perform(post("/api/sessions/no-such-id/runs")
+                        .contentType("application/json").content("{\"input\":\"hi\"}"))
+                .andExpect(status().isNotFound());
+    }
 }

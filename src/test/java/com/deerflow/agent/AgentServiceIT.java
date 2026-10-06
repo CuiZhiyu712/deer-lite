@@ -63,7 +63,7 @@ class AgentServiceIT {
         var echo = org.springframework.ai.tool.function.FunctionToolCallback
                 .<com.deerflow.tool.ToolInputs.WebSearch, String>builder("echo", in -> "echo:" + in.query())
                 .description("echo").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(echo));
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of(echo));
 
         var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "帮我echo", null, null, null, Instant.now(), null);
         var sink = new CollectingSink();
@@ -93,7 +93,7 @@ class AgentServiceIT {
         scriptedModel.reset();
         String sid = UUID.randomUUID().toString();
         sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of());
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of());
         var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null, Instant.now(), null);
         var sink = new CollectingSink();
         agentService.executeRun(sessionRepo.findById(sid).orElseThrow(), run, "x", sink, new RunContext());
@@ -118,7 +118,7 @@ class AgentServiceIT {
         var echo = org.springframework.ai.tool.function.FunctionToolCallback
                 .<com.deerflow.tool.ToolInputs.WebSearch, String>builder("echo", in -> "echo:" + in.query())
                 .description("echo").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(echo));
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of(echo));
 
         var run = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "x", null, null, null, Instant.now(), null);
         var sink = new CollectingSink();
@@ -146,7 +146,7 @@ class AgentServiceIT {
         scriptedModel.reset();
         String sid = UUID.randomUUID().toString();
         sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of());
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of());
 
         scriptedModel.pushText("一");
         var run1 = new Run(UUID.randomUUID().toString(), sid, "RUNNING", "q1", null, null, null, Instant.now(), null);
@@ -175,7 +175,7 @@ class AgentServiceIT {
                     return "slow:" + in.query();
                 })
                 .description("slow").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(slow));
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of(slow));
 
         var started = agentService.startRun(sid, "开始");
         // runId 由 StartedRun 同步返回（T16 审查 M2）；仍需等 run 行落库，再等工具真正开始执行
@@ -215,7 +215,7 @@ class AgentServiceIT {
                     return "blocked";
                 })
                 .description("blocker").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(blocker));
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of(blocker));
         scriptedModel.pushToolCall("t1", "blocker", "{\"query\":\"a\"}");
         scriptedModel.pushEmpty();
 
@@ -237,7 +237,7 @@ class AgentServiceIT {
         scriptedModel.reset();
         String sid = UUID.randomUUID().toString();
         sessionRepo.save(new ChatSession(sid, "t", "deepseek-chat", Instant.now()));
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of());
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of());
         scriptedModel.pushText("部分输出");
 
         // startedAt 拨旧 700s > max-run-seconds(600)：首个 chunk 即触发限额
@@ -268,7 +268,7 @@ class AgentServiceIT {
                     return "blocked";
                 })
                 .description("blocker").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
-        when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(blocker));
+        when(toolsFactory.forRun(anyString(), any(), any())).thenReturn(List.of(blocker));
         scriptedModel.pushToolCall("t1", "blocker", "{\"query\":\"a\"}");
         scriptedModel.pushError(new IllegalStateException("model boom"));
 

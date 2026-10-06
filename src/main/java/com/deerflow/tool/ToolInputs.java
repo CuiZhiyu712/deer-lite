@@ -1,5 +1,7 @@
 package com.deerflow.tool;
 
+import java.util.List;
+
 /** 对模型暴露的工具入参（FunctionToolCallback 按 record 自动生成 JSON Schema）。 */
 public final class ToolInputs {
 
@@ -12,4 +14,8 @@ public final class ToolInputs {
     public record Bash(String command) {}
     public record WebSearch(String query, Integer maxResults) {}
     public record WebFetch(String url) {}
+
+    public record WriteTodos(List<TodoInput> todos) {
+        public record TodoInput(String content, String status) {}
+    }
 }
