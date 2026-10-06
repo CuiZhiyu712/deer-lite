@@ -177,17 +177,15 @@ class AgentServiceIT {
                 .description("slow").inputType(com.deerflow.tool.ToolInputs.WebSearch.class).build();
         when(toolsFactory.forRun(anyString(), any())).thenReturn(List.of(slow));
 
-        var emitter = agentService.startRun(sid, "开始");
-        // 从 DB 拿到 runId（RUNNING 行）
-        String runId = null;
-        for (int i = 0; i < 40 && runId == null; i++) {
-            runId = runRepo.findAll().stream()
-                    .filter(r -> sid.equals(r.getSessionId()) && "RUNNING".equals(r.getStatus()))
-                    .map(Run::getId).findFirst().orElse(null);
-            if (runId == null) Thread.sleep(50);
-        }
+        var started = agentService.startRun(sid, "开始");
+        // runId 由 StartedRun 同步返回（T16 审查 M2）；仍需等 run 行落库，再等工具真正开始执行
+        String runId = started.runId();
         assertThat(runId).isNotNull();
-        Thread.sleep(150); // 等工具真正开始执行
+        for (int i = 0; i < 40 && runRepo.findById(runId).isEmpty(); i++) {
+            Thread.sleep(50);
+        }
+        assertThat(runRepo.findById(runId)).isPresent();
+        Thread.sleep(150);
         agentService.cancel(runId);
 
         String status = null;
@@ -201,7 +199,7 @@ class AgentServiceIT {
         assertThat(rows.get(0).getRole()).isEqualTo("USER");
         // ④ 取消也持久化部分结果：CANCELLED 状态在 finally 才落库，晚于 persistRunResult，因此此刻末行必为部分 ASSISTANT
         assertThat(rows.get(rows.size() - 1).getRole()).isEqualTo("ASSISTANT");
-        emitter.complete(); // 清理真实 emitter（无 handler 的 SseEmitter 直接 complete 安全）
+        started.emitter().complete(); // 清理真实 emitter（无 handler 的 SseEmitter 直接 complete 安全）
     }
 
     @Test

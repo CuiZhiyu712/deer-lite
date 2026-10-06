@@ -111,7 +111,9 @@ public class AgentService {
         this.maxRunTokens = maxRunTokens;
     }
 
-    public SseEmitter startRun(String sessionId, String input) {
+    public record StartedRun(String runId, SseEmitter emitter) {}
+
+    public StartedRun startRun(String sessionId, String input) {
         ChatSession session = sessionRepo.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + sessionId));
         if (!activeSessions.add(sessionId)) {
@@ -130,7 +132,7 @@ public class AgentService {
             sink.fail(e);
             throw e;
         }
-        return emitter;
+        return new StartedRun(run.getId(), emitter);
     }
 
     public void cancel(String runId) {
