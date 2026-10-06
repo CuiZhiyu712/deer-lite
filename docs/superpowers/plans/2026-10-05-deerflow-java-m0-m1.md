@@ -1725,7 +1725,7 @@ class WebToolsTest {
                     {"title":"B","url":"https://b.com","content":"bbb"}
                   ]}""", MediaType.APPLICATION_JSON));
 
-        var tool = new WebSearchTool(builder.build(), "test-key");
+        var tool = new WebSearchTool(builder, "test-key");
         String out = tool.webSearch("deerflow java", 5);
         assertThat(out).contains("A").contains("https://a.com").contains("B");
         server.verify();
@@ -1738,7 +1738,7 @@ class WebToolsTest {
         server.expect(requestTo("https://r.jina.ai/https://example.com"))
               .andRespond(withSuccess("# Title\ncontent", MediaType.TEXT_PLAIN));
 
-        var tool = new WebFetchTool(builder.build());
+        var tool = new WebFetchTool(builder);
         assertThat(tool.webFetch("https://example.com")).contains("# Title");
         server.verify();
     }
@@ -1806,6 +1806,8 @@ package com.deerflow.tool;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
+
 @Component
 public class WebFetchTool {
 
@@ -1816,7 +1818,8 @@ public class WebFetchTool {
     }
 
     public String webFetch(String url) {
-        String text = http.get().uri("/{url}", url).retrieve().body(String.class);
+        // 用 URI 参数绕过模板变量严格编码：.uri("/{url}", url) 会把 :// 编码成 %3A%2F%2F（实测）
+        String text = http.get().uri(URI.create("/" + url)).retrieve().body(String.class);
         if (text == null) {
             return "抓取失败：空响应";
         }
