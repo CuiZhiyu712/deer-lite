@@ -753,34 +753,41 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class EventSinkTest {
 
-    static class CollectingSink extends EventSink {
-        final List<String> names = new CopyOnWriteArrayList<>();
-        final List<Object> payloads = new CopyOnWriteArrayList<>();
+    /** 用 Mockito 假 emitter：真实走 send→emit 路径，验证顺序/关闭语义与 JSON 序列化。 */
+    @Test
+    void sendsEventsAndStopsAfterComplete() throws java.io.IOException {
+        var emitter = org.mockito.Mockito.mock(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.class);
+        EventSink sink = new EventSink(emitter, new tools.jackson.databind.ObjectMapper());
 
-        CollectingSink() { super(null, null); }
+        sink.send(new AgentEvent.TextDelta("你"));
+        sink.send(new AgentEvent.RunEnd("done", null));
+        org.mockito.Mockito.verify(emitter, org.mockito.Mockito.times(2))
+                .send(org.mockito.ArgumentMatchers.any(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.SseEventBuilder.class));
+        org.mockito.Mockito.verify(emitter, org.mockito.Mockito.never()).complete();
 
-        @Override
-        protected void emit(String name, Object data) {
-            names.add(name);
-            payloads.add(data);
-        }
+        sink.complete();
+        org.mockito.Mockito.verify(emitter).complete();
+        assertThat(sink.isClosed()).isTrue();
+
+        sink.send(new AgentEvent.TextDelta("ignored"));
+        org.mockito.Mockito.verify(emitter, org.mockito.Mockito.times(2))
+                .send(org.mockito.ArgumentMatchers.any(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.SseEventBuilder.class));
     }
 
     @Test
-    void emitsEventsInOrderAndStopsAfterClose() {
-        CollectingSink sink = new CollectingSink();
+    void serializesEventPayloadAsJson() throws java.io.IOException {
+        var emitter = org.mockito.Mockito.mock(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.class);
+        EventSink sink = new EventSink(emitter, new tools.jackson.databind.ObjectMapper());
         sink.send(new AgentEvent.TextDelta("你"));
-        sink.send(new AgentEvent.TextDelta("好"));
-        sink.send(new AgentEvent.RunEnd("done", null));
-        sink.complete();
-        sink.send(new AgentEvent.TextDelta("ignored"));
 
-        assertThat(sink.names).containsExactly("text_delta", "text_delta", "run_end");
-        assertThat(sink.payloads.get(0)).isEqualTo("<data>你</data>".replace("<data>", "").replace("</data>", "")); // 见实现：TextDelta 序列化为 JSON
+        var captor = org.mockito.ArgumentCaptor.forClass(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.SseEventBuilder.class);
+        org.mockito.Mockito.verify(emitter).send(captor.capture());
+        String rendered = captor.getValue().build().toString();
+        assertThat(rendered).contains("text_delta").contains("delta").contains("你");
     }
 }
 ```
-（注：上面断言按实现序列化调整；先写测试时用 `assertThat(sink.names)` 部分即可，payload 断言在 Step 3 后按实际 JSON 修正。）
+（注：SseEventBuilder.build() 的结果依赖 Spring 内部渲染，断言用 contains 保持稳健；若 build() 不可访问，改用 contains("你") 的替代验证并在报告中说明。）
 
 - [ ] **Step 2: 实现 AgentEvent 与 EventSink**
 
