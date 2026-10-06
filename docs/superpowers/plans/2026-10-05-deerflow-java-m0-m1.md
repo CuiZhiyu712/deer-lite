@@ -1565,10 +1565,11 @@ public class ToolExecutionDecorator implements ToolCallback {
         return delegate.getToolDefinition();
     }
 
-    /** 必须透传：框架会读 returnDirect 等元数据（T4 审查 javap 实测，勿删）。 */
+    /** 必须透传：框架会读 returnDirect 等元数据（T4/T11 审查 javap 实测，勿删）；null 防御。 */
     @Override
     public ToolMetadata getToolMetadata() {
-        return delegate.getToolMetadata();
+        ToolMetadata metadata = delegate.getToolMetadata();
+        return metadata != null ? metadata : ToolMetadata.builder().build();
     }
 
     @Override
@@ -1579,25 +1580,29 @@ public class ToolExecutionDecorator implements ToolCallback {
     @Override
     public String call(String toolInput, ToolContext toolContext) {
         String name = getToolDefinition().name();
+        if (ctx.isCancelled()) {
+            // 取消先判且不消耗轮次（T11 审查）
+            return "错误：用户已取消本次运行，请停止调用工具。";
+        }
         int round = roundCounter.incrementAndGet();
         if (round > maxRounds) {
             return "错误：本次运行工具调用已达上限(" + maxRounds + ")，请停止调用工具并直接给出最终答复。";
-        }
-        if (ctx.isCancelled()) {
-            return "错误：用户已取消本次运行，请停止调用工具。";
         }
         String callId = UUID.randomUUID().toString();
         sink.send(new AgentEvent.ToolStart(callId, name, preview(toolInput, 300)));
         long t0 = System.currentTimeMillis();
         try {
             String out = delegate.call(toolInput, toolContext);
-            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, out, true));
-            sink.send(new AgentEvent.ToolResult(callId, name, true, preview(out, 500), System.currentTimeMillis() - t0));
+            long ms = System.currentTimeMillis() - t0;
+            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, out, true, ms));
+            sink.send(new AgentEvent.ToolResult(callId, name, true, preview(out, 500), ms));
             return out;
         } catch (Exception e) {
-            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, String.valueOf(e.getMessage()), false));
-            sink.send(new AgentEvent.ToolResult(callId, name, false, preview(String.valueOf(e.getMessage()), 300), System.currentTimeMillis() - t0));
-            return "工具执行失败(" + name + "): " + e.getMessage() + "。请调整参数或换一种方式，不要重复同样的调用。";
+            String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            long ms = System.currentTimeMillis() - t0;
+            ctx.addToolTrace(new RunContext.ToolTrace(callId, name, toolInput, msg, false, ms));
+            sink.send(new AgentEvent.ToolResult(callId, name, false, preview(msg, 300), ms));
+            return "工具执行失败(" + name + "): " + msg + "。请调整参数或换一种方式，不要重复同样的调用。";
         }
     }
 
@@ -1620,7 +1625,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** 一次 run 的运行时上下文：取消信号、当前子进程引用（供强杀）、工具调用轨迹（供持久化）。 */
 public class RunContext {
 
-    public record ToolTrace(String id, String name, String args, String result, boolean ok) {}
+    public record ToolTrace(String id, String name, String args, String result, boolean ok, long durationMs) {}
 
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
     private final AtomicReference<Process> currentProcess = new AtomicReference<>();
@@ -1630,21 +1635,37 @@ public class RunContext {
         return cancelled.get();
     }
 
+    /** 幂等；守护线程做后代兜底清扫（无预算；Windows 晚到孤儿仍可回收，POSIX 为已知限制）。 */
     public void requestCancel() {
-        cancelled.set(true);
+        if (!cancelled.compareAndSet(false, true)) {
+            return;
+        }
         Process p = currentProcess.get();
         if (p != null) {
-            // 先瞬时杀直接子进程，再由守护线程做有界后代清扫——
-            // descendants() 在本机可能阻塞 4-8s（T10 实测），不能放在调用线程同步做
-            p.destroyForcibly();
-            Thread sweeper = new Thread(() -> p.descendants().forEach(ProcessHandle::destroyForcibly), "run-cancel-sweeper");
-            sweeper.setDaemon(true);
-            sweeper.start();
+            killTreeAsync(p);
         }
+    }
+
+    /** 先瞬时杀直接子进程，再由守护线程清理后代——descendants() 在本机可能阻塞 4-8s（T10 实测），不能放在调用线程同步做。 */
+    private static void killTreeAsync(Process p) {
+        p.destroyForcibly();
+        Thread sweeper = new Thread(() -> {
+            try {
+                p.descendants().forEach(ProcessHandle::destroyForcibly);
+            } catch (Exception ignore) {
+                // 兜底线程：失败不上报
+            }
+        }, "run-cancel-sweeper");
+        sweeper.setDaemon(true);
+        sweeper.start();
     }
 
     public void bindProcess(Process p) {
         currentProcess.set(p);
+        if (cancelled.get()) {
+            // 取消落在"启动检查之后、bind 之前"的窗口：补杀，堵住竞态（T11 审查实测修复）
+            killTreeAsync(p);
+        }
     }
 
     public void clearProcess(Process p) {
